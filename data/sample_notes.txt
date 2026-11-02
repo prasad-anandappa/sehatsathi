@@ -1,0 +1,11 @@
+# One evening's visit notes — ASHA worker, Rampur cluster (sample / synthetic data)
+Sunita Devi, Rampur, pregnant 8 months, high BP, swelling in feet, severe headache, ANC checkup due in 2 days
+Rekha Kumari, Rampur, pregnant 5 months, low HB, iron tablets follow-up due in 4 days
+Ramesh Kumar, Kishanpur, TB patient, missed 2 doses, coughing blood, DOTS review due tomorrow
+Sita Devi, Kishanpur, TB patient, DOTS review due in 6 days
+Aarav, Rampur, child 18 months, measles vaccine due on 2026-11-05
+Priya, Kishanpur, child 9 months, immunization overdue by 10 days
+Kamla Bai, Rampur, 62 years, BP medicine refill due in 3 days
+Farida Bano, Rampur, postpartum, delivered 10 days ago, baby not feeding, high fever, postnatal checkup due today
+Mohan Lal, Kishanpur, 70 years, diabetes, sugar test due in 7 days
+Anita Devi, Rampur, pregnant 3 months, first pregnancy, ANC checkup due in 12 days
