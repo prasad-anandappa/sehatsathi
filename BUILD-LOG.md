@@ -55,3 +55,9 @@ deployment claimed — README and SUBMISSION.md both state this plainly.
   automated tests: completeness, placeholders, 112/108 presence,
   native-script Unicode blocks, UTF-8 cleanliness, live formatting.
 - Tests: 18 -> 39 (Phase 2) -> 49 (Phase 2b). Version 1.2.0.
+
+- Calibration (same day): after the translation squads' self-ratings
+  were reviewed, Assamese, Odia and Konkani moved from "verified" to
+  "provisional" — their own translators rated them medium confidence.
+  Verified set is now 12 (en, hi, kn, bn, gu, mr, pa, ta, te, ml, ne,
+  ur); provisional 11. Status lives in i18n.py LANGUAGE_META.

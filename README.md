@@ -81,12 +81,14 @@ Hindi · Kannada · Kashmiri · Konkani · Maithili · Malayalam · Manipuri
 (Ol Chiki) · Sindhi · Tamil · Telugu · Urdu.
 
 Honesty note: every language is covered by automated tests (string
-completeness, placeholders, native-script rendering, encoding). Fifteen
+completeness, placeholders, native-script rendering, encoding). Twelve
 were additionally desk-checked string-by-string against the English
-source by the maintainers; **eight — Bodo, Dogri, Kashmiri, Maithili,
-Manipuri, Sanskrit, Santali, Sindhi — are marked `provisional` in
-`src/sehatsathi/i18n.py` and need a native-speaker read before field
-use.** That status is recorded in the code, not hidden.
+source by the maintainers; **eleven — Assamese, Bodo, Dogri, Kashmiri,
+Konkani, Maithili, Manipuri, Odia, Sanskrit, Santali, Sindhi — are
+marked `provisional` in `src/sehatsathi/i18n.py` and need a
+native-speaker read before field use** (their translators rated them
+medium confidence or lower). That status is recorded in the code,
+not hidden.
 
 ## Demo
 
