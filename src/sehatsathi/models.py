@@ -35,6 +35,9 @@ class Patient:
     age_years: float | None = None
     age_months: int | None = None          # for children
     phone: str = ""
+    abha_id: str = ""                      # only as written in the note —
+                                           # recorded, never verified
+                                           # (no ABDM integration)
     due_date: date | None = None           # next checkup / dose / vaccine
     due_label: str = ""                    # human label, e.g. "ANC checkup"
     risk_factors: list[str] = field(default_factory=list)
@@ -51,8 +54,33 @@ class FollowUp:
     score: int                             # deterministic, explainable
     reasons: list[str] = field(default_factory=list)
     action: str = ""                       # what the worker should do
-    reminder_en: str = ""
-    reminder_hi: str = ""
+    # Reminders in every shipped language: {lang_code: text} — English,
+    # Hindi, Kannada and all other Eighth-Schedule languages (i18n.py).
+    reminders: dict = field(default_factory=dict)
+    # Family-facing notes, same {lang_code: text} shape, for categories
+    # where a family member is usually the one who must act
+    # (child / postpartum / elderly); empty dict otherwise.
+    caregiver_notes: dict = field(default_factory=dict)
+
+    @property
+    def reminder_en(self) -> str:
+        return self.reminders.get("en", "")
+
+    @property
+    def reminder_hi(self) -> str:
+        return self.reminders.get("hi", "")
+
+    @property
+    def reminder_kn(self) -> str:
+        return self.reminders.get("kn", "")
+
+    @property
+    def caregiver_note(self) -> dict:
+        """The original EN/HI/KN view of caregiver_notes."""
+        if not self.caregiver_notes:
+            return {}
+        return {k: self.caregiver_notes[k]
+                for k in ("en", "hi", "kn") if k in self.caregiver_notes}
 
 
 @dataclass
@@ -85,6 +113,11 @@ class Report:
                 "action": f.action,
                 "reminder_en": f.reminder_en,
                 "reminder_hi": f.reminder_hi,
+                "reminder_kn": f.reminder_kn,
+                "reminders": f.reminders,
+                "caregiver_note": f.caregiver_note or None,
+                "caregiver_notes": f.caregiver_notes or None,
+                "abha_id_from_notes": f.patient.abha_id or None,
             }
         return {
             "plan_date": self.plan_date.isoformat(),

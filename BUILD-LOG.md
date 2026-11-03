@@ -34,3 +34,24 @@ deployment claimed — README and SUBMISSION.md both state this plainly.
 - [ ] Deploy API (any cloud; Dockerfile included) → live demo link.
 - [ ] Record 2–3 min demo per DEMO-SCRIPT.md.
 - [ ] File submission issue (SUBMISSION.md fields) before 15 Nov 2026.
+
+## 2026-11-03 — Phase 2 (audit fixes) + Phase 2b (23 languages)
+
+- Full audit written (workspace: hackathons/sehatsathi/AUDIT-2026-11-03.md).
+  Two HIGH clinical-safety fixes: danger-sign matching is now
+  negation-aware ("no bleeding" no longer escalates), and swelling only
+  counts as the face/hands pattern taught in ASHA training.
+- Route-cap deferrals are now reported by name (summary.visits_deferred),
+  never silently truncated.
+- New: phone-browser UI at GET / (no JavaScript, <30 KB), helplines
+  directory (GET /helplines), Kannada reminders, family/caregiver notes,
+  ABHA id recorded from notes (no ABDM integration claimed), API
+  hardening (bad date -> 400, oversized notes -> 413, gzip).
+- Phase 2b: reminders, caregiver notes and UI chrome in all 22
+  Eighth-Schedule languages + English (langs/ package + i18n registry).
+  15 languages maintainer desk-checked ("verified"), 8 marked
+  "provisional" in i18n.py pending native-speaker review (Bodo, Dogri,
+  Kashmiri, Maithili, Manipuri, Sanskrit, Santali, Sindhi). Per-language
+  automated tests: completeness, placeholders, 112/108 presence,
+  native-script Unicode blocks, UTF-8 cleanliness, live formatting.
+- Tests: 18 -> 39 (Phase 2) -> 49 (Phase 2b). Version 1.2.0.

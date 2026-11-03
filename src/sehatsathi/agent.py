@@ -11,7 +11,7 @@ from datetime import date, timedelta
 
 from . import extract, planner, risk
 from .llm import ReminderEnhancer, get_enhancer
-from .messages import make_reminders
+from .messages import make_caregiver_note, make_reminders
 from .models import Priority, Report
 
 
@@ -25,11 +25,20 @@ class SehatSathiAgent:
         patients = extract.parse_notes(notes, today)
         followups = [risk.score_patient(p, today) for p in patients]
         for fu in followups:
-            en, hi = make_reminders(fu)
-            fu.reminder_en, fu.reminder_hi = self.enhancer.enhance(en, hi)
+            reminders = make_reminders(fu)
+            # The optional LLM enhancer may only touch EN/HI (its
+            # original contract); every other language — Kannada
+            # included — always stays the reviewed template.
+            en, hi = self.enhancer.enhance(reminders["en"], reminders["hi"])
+            reminders["en"], reminders["hi"] = en, hi
+            fu.reminders = reminders
+            fu.caregiver_notes = make_caregiver_note(fu)
         followups.sort(key=lambda f: -f.score)
         escalations = [f for f in followups if f.priority == Priority.CRITICAL]
         plan = planner.build_plan(followups)
+        planned_names = {s.followup.patient.name for s in plan}
+        deferred = [f.patient.name for f in followups
+                    if f.patient.name not in planned_names]
         by_cat: dict[str, int] = {}
         for f in followups:
             by_cat[f.patient.category.value] = by_cat.get(f.patient.category.value, 0) + 1
@@ -38,6 +47,10 @@ class SehatSathiAgent:
             "escalations": len(escalations),
             "high_priority": sum(1 for f in followups if f.priority == Priority.HIGH),
             "visits_planned": len(plan),
+            # Audit M1: the route caps at planner.MAX_VISITS — anyone
+            # beyond the cap is named here, never silently dropped.
+            "visits_deferred": len(deferred),
+            "deferred_patients": deferred,
             "villages": sorted({f.patient.village for f in followups if f.patient.village}),
             "by_category": by_cat,
             "est_worker_minutes_saved": 25 * max(len(patients) - 1, 0),
@@ -70,5 +83,18 @@ class SehatSathiAgent:
         for f in report.followups:
             lines.append(f"**{f.patient.name}:** {f.reminder_en}")
             lines.append(f"> {f.reminder_hi}")
+            lines.append(f"> {f.reminder_kn}")
+            if f.caregiver_note:
+                lines.append(f"👨‍👩‍👧 *Family note:* {f.caregiver_note['en']}")
             lines.append("")
+        if report.summary.get("visits_deferred"):
+            lines += ["## ⏭️ Not in tomorrow's route (visit cap reached)", "",
+                      "These follow-ups did not fit the day route — carry "
+                      "them first the day after, or hand to the ANM: "
+                      + ", ".join(report.summary["deferred_patients"]), ""]
+        lines += ["---",
+                  "Emergency: **112** · Ambulance: **108** · "
+                  "Ayushman Bharat PM-JAY: **14555** · TB (Nikshay Sampark): "
+                  "**1800-11-6666** · Child: **1098** · Women: **181** · "
+                  "Mental health (Tele-MANAS): **14416**"]
         return "\n".join(lines)

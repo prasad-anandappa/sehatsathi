@@ -14,8 +14,13 @@ from .models import FollowUp, Priority, VisitSlot
 
 _ORDER = {Priority.CRITICAL: 0, Priority.HIGH: 1, Priority.MEDIUM: 2, Priority.LOW: 3}
 
+# A realistic ceiling for one worker's day route. Follow-ups beyond the
+# cap are NOT dropped silently — the agent's summary names them as
+# deferred (audit 2026-11-03, M1).
+MAX_VISITS = 12
 
-def build_plan(followups: list[FollowUp], max_visits: int = 12) -> list[VisitSlot]:
+
+def build_plan(followups: list[FollowUp], max_visits: int = MAX_VISITS) -> list[VisitSlot]:
     ordered = sorted(
         followups,
         key=lambda f: (_ORDER[f.priority], -f.score, f.patient.village, f.patient.name),

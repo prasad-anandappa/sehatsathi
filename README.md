@@ -8,7 +8,8 @@ Author: **Prasad Dimba Anandappa** · GitHub: [@prasad-anandappa](https://github
 > turning for her: paste the day's notes, and the agent extracts every patient
 > who needs follow-up, ranks them by explainable risk, **flags danger signs
 > for same-day escalation**, builds tomorrow's village-by-village route, and
-> writes a simple reminder for every patient — in English and Hindi.
+> writes a simple reminder for every patient — in **all 22 scheduled Indian
+> languages plus English**, each in its native script.
 
 ---
 
@@ -35,10 +36,12 @@ An agent loop in one inspectable pass — **perceive → reason → act**:
 
 | Step | Tool | What it does |
 |---|---|---|
-| Perceive | `extract.py` | Rule-based parser for free-text / voice-transcript-style notes (English + common Hindi words, Hindi digits too). Finds category (pregnant / TB / child / postpartum / elderly), due dates ("due in 3 days", "overdue by 10 days", ISO dates), missed doses, risk factors, and **14 danger-sign patterns**. Never invents a patient who is not in the notes. |
+| Perceive | `extract.py` | Rule-based parser for free-text / voice-transcript-style notes (English + common Hindi words, Hindi digits too). Finds category (pregnant / TB / child / postpartum / elderly), due dates ("due in 3 days", "overdue by 10 days", ISO dates), missed doses, risk factors, and **14 danger-sign patterns**. Danger-sign matching is **negation-aware** ("no bleeding" never escalates) and swelling only counts as taught in ASHA training (face/hands). An **ABHA id written in a note is recorded as written** — no ABDM lookup, no verification claimed. Never invents a patient who is not in the notes. |
 | Reason | `risk.py` | Deterministic, **explainable** scoring: every point carries a written reason ("DANGER SIGN: severe headache…", "immunization overdue by 10 days"). Danger sign ⇒ `CRITICAL`, always first. |
-| Act — plan | `planner.py` | Tomorrow's route: danger first, then risk, villages grouped so the worker walks one sane route; 40-minute slots from 09:00 with a midday break. |
-| Act — remind | `messages.py` | Per-patient reminders in simple English + simple Hindi (Devanagari), ready to copy into SMS/WhatsApp. Critical cases get an urgent "call 108 / go to PHC" message. |
+| Act — plan | `planner.py` | Tomorrow's route: danger first, then risk, villages grouped so the worker walks one sane route; 40-minute slots from 09:00 with a midday break. The route cap (12) is explicit: anyone beyond it is **named in the report as deferred**, never silently dropped. |
+| Act — remind | `messages.py` + `langs/` | Per-patient reminders in **23 languages** (all 22 Eighth-Schedule languages + English), simple words, native script, ready to copy into SMS/WhatsApp. Critical cases carry **112 + 108** in every language. Child/postpartum/elderly follow-ups also get a **family/caregiver note**. |
+| Helplines | `helplines.py` | Verified Indian helpline directory (112 · 108 · 102 · 104 · PM-JAY 14555 · Nikshay TB 1800-11-6666 · Child 1098 · Women 181 · Tele-MANAS 14416 · Elder 14567), routed by situation. |
+| UI | `ui.py` | Phone-browser page over the same core: inline CSS, **no JavaScript**, under 30 KB, works on low-end phones and patchy connections. Language picker is a plain form — it works with JavaScript disabled. Nothing typed is stored. |
 | Optional LLM | `llm.py` | Env-gated, OpenAI-compatible rephrasing for warmth **only**. An LLM never decides priority, danger signs or dates. Off by default; silent fallback to templates. |
 
 **Offline by design:** the core is pure Python stdlib — no dependencies, no
@@ -55,7 +58,7 @@ PYTHONPATH=src python3 -m sehatsathi.cli --notes data/sample_notes.txt --date 20
 
 # 2) Tests (needs pytest; API tests also need fastapi/httpx)
 pip install -e ".[dev,api]"
-pytest -q            # 18 tests
+pytest -q            # 49 tests
 
 # 3) API / deployed form
 uvicorn sehatsathi.api:app --port 8000     # after: pip install -e ".[api]"
@@ -64,9 +67,26 @@ uvicorn sehatsathi.api:app --port 8000     # after: pip install -e ".[api]"
 ```
 
 Sample output (from `data/sample_notes.txt`, 10 patients): **3 same-day
-escalations** found (a pregnant mother with severe headache + swelling, a TB
-patient coughing blood, a postpartum mother whose baby is not feeding), a
-10-visit timed route for the next day, and 10 bilingual reminders.
+escalations** found (a pregnant mother with severe headache + facial
+swelling, a TB patient coughing blood, a postpartum mother whose baby is
+not feeding), a 10-visit timed route for the next day, and 10 reminders —
+each written in all 23 languages.
+
+## Languages (23)
+
+Reminders, caregiver notes and the web UI ship in English + all 22
+Eighth-Schedule languages: Assamese · Bengali · Bodo · Dogri · Gujarati ·
+Hindi · Kannada · Kashmiri · Konkani · Maithili · Malayalam · Manipuri
+(Meitei Mayek) · Marathi · Nepali · Odia · Punjabi · Sanskrit · Santali
+(Ol Chiki) · Sindhi · Tamil · Telugu · Urdu.
+
+Honesty note: every language is covered by automated tests (string
+completeness, placeholders, native-script rendering, encoding). Fifteen
+were additionally desk-checked string-by-string against the English
+source by the maintainers; **eight — Bodo, Dogri, Kashmiri, Maithili,
+Manipuri, Sanskrit, Santali, Sindhi — are marked `provisional` in
+`src/sehatsathi/i18n.py` and need a native-speaker read before field
+use.** That status is recorded in the code, not hidden.
 
 ## Demo
 
@@ -110,8 +130,10 @@ the offline design means a pilot needs no infrastructure beyond a phone.
 
 ```
 src/sehatsathi/  extract.py · risk.py · planner.py · messages.py
+                 helplines.py · ui.py · i18n.py · langs/ (23 languages)
                  llm.py (optional) · agent.py (orchestrator) · cli.py · api.py
-tests/           18 pytest tests (extraction, agent, API)
+tests/           49 pytest tests (extraction, risk, India features,
+                 languages, UI, API)
 data/            sample_notes.txt — one synthetic day of ASHA notes
 ```
 

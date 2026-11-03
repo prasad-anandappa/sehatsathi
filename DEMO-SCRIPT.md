@@ -24,12 +24,14 @@ itself: ten visits, timed from 9 AM, danger first, risk next, and
 villages grouped so she walks one route. Every ranking shows its reason —
 no black box a health worker has to trust blindly."
 
-**2:10–2:40 — Reminders + offline.** Show the bilingual reminders.
-"Every patient gets a reminder in simple English and Hindi, ready for
-SMS or WhatsApp. And all of this runs offline — pure Python, no internet,
-no API key — because that's the reality of the villages she serves."
+**2:10–2:40 — Reminders + offline.** Show the reminders; switch the
+language picker to the patient's language. "Every patient gets a reminder
+in her own language — all 22 scheduled languages plus English, in native
+script — ready for SMS or WhatsApp. And all of this runs offline — pure
+Python, no internet, no API key — because that's the reality of the
+villages she serves."
 
-**2:40–3:00 — Close.** Show tests passing + repo. "Eighteen automated
+**2:40–3:00 — Close.** Show tests passing + repo. "Forty-nine automated
 tests, MIT open source, built in AgentFoundry for Code for a Billion.
 SehatSathi — a companion for the worker, so she can be there for
 everyone else."

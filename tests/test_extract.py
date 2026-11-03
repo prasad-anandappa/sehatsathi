@@ -7,12 +7,12 @@ TODAY = date(2026, 11, 2)
 
 
 def test_pregnant_with_danger_signs():
-    p = parse_line("Sunita Devi, Rampur, pregnant 8 months, swelling in feet, "
+    p = parse_line("Sunita Devi, Rampur, pregnant 8 months, swelling in face, "
                    "severe headache, ANC checkup due in 2 days", TODAY)
     assert p.category == Category.PREGNANT
     assert p.months_pregnant == 8
     assert "severe headache" in p.danger_signs
-    assert "swelling of face/hands/feet" in p.danger_signs
+    assert "swelling of face/hands" in p.danger_signs
     assert p.due_date == TODAY + timedelta(days=2)
     assert p.village == "Rampur"
 

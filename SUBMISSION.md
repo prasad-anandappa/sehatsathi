@@ -21,10 +21,11 @@ danger sign seen a day late, TB treatment interrupted, a vaccine window
 closed. SehatSathi is an agent that takes the worker's end-of-day visit
 notes and returns (1) same-day escalations for danger signs, (2) a
 risk-ranked, village-grouped visit plan for tomorrow, and (3) a simple
-English+Hindi reminder for every patient. It runs fully offline with
+a reminder for every patient in all 22 scheduled Indian languages plus
+English, each in its native script. It runs fully offline with
 explainable, deterministic rules — because the villages it serves have the
 least connectivity and the most at stake.
 
 **Proven-impact honesty line (keep in the submission):** tested working
-agent, 18 automated tests, synthetic sample data; no real-patient field
+agent, 49 automated tests, synthetic sample data; no real-patient field
 deployment is claimed yet — a one-PHC pilot is the next step.

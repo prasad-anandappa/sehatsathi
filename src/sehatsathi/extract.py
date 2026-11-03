@@ -22,11 +22,19 @@ from .models import Category, Patient
 # Danger signs — aligned with common maternal / TB / child red flags
 # taught in ASHA training modules (bleeding, convulsions, reduced fetal
 # movement, severe headache with swelling, coughing blood, high fever...).
+# NOTE (audit 2026-11-03, H2): the pre-eclampsia pattern is swelling of
+# the FACE/HANDS. Feet/leg-only swelling is common in normal pregnancy
+# and is handled as a risk factor in parse_line, not a danger sign.
 DANGER_SIGNS: dict[str, list[str]] = {
     "vaginal bleeding": ["bleeding", "blood loss", "khoon"],
     "severe headache": ["severe headache", "tez sir dard"],
     "blurred vision": ["blurred vision", "dhundla dikh"],
-    "swelling of face/hands/feet": ["swelling", "soojan"],
+    "swelling of face/hands": ["face swelling", "swelling in face",
+                               "swelling of face", "swelling on face",
+                               "hands swelling", "swelling in hands",
+                               "swelling of hands", "mooh soojan",
+                               "mooh par soojan", "haath soojan",
+                               "haathon mein soojan"],
     "convulsions / fits": ["convulsion", "fits", "mirgi", "daura"],
     "reduced fetal movement": ["baby not moving", "reduced fetal movement",
                                "bachcha hil nahi"],
@@ -43,17 +51,62 @@ DANGER_SIGNS: dict[str, list[str]] = {
 
 _HINDI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 
+# Negation handling (audit 2026-11-03, H1): workers routinely document
+# ABSENT signs — "no bleeding", "khoon nahi hai". A variant match whose
+# immediate context carries a negation word is the worker saying the
+# sign is NOT present, and must never escalate the patient.
+# Scope rule: notes are comma/semicolon fragments, so a pre-negation
+# ("no ", "nahi ", ...) applies within its own fragment only — it must
+# not reach across a comma and suppress a real sign in the next
+# fragment ("no bleeding, severe headache" escalates on the headache).
+_NEG_BEFORE = ("no ", "not ", "nahi ", "nahin ", "without ", "koi ")
+_NEG_AFTER = ("nahi", "nahin")
+
 
 def _norm(text: str) -> str:
     return text.translate(_HINDI_DIGITS).lower()
 
 
+def _is_negated(low: str, start: int, end: int) -> bool:
+    frag_start = max(low.rfind(",", 0, start), low.rfind(";", 0, start)) + 1
+    before = low[frag_start:start]
+    after = low[end:end + 10]
+    return any(n in before for n in _NEG_BEFORE) or \
+        any(n in after for n in _NEG_AFTER)
+
+
 def _find_danger_signs(low: str) -> list[str]:
     found = []
     for label, variants in DANGER_SIGNS.items():
-        if any(v in low for v in variants):
-            found.append(label)
+        for v in variants:
+            idx = low.find(v)
+            while idx != -1:
+                if not _is_negated(low, idx, idx + len(v)):
+                    found.append(label)
+                    break
+                idx = low.find(v, idx + 1)
+            if label in found:
+                break
     return found
+
+
+_ABHA_ID = re.compile(r"\b(\d{2})[-\s]?(\d{4})[-\s]?(\d{4})[-\s]?(\d{4})\b")
+_ABHA_ADDR = re.compile(r"\b[\w.+-]+@abdm\b")
+
+
+def _find_abha(line: str, low: str) -> str:
+    """ABHA identifier *as written in the worker's own note*.
+
+    Demo boundary: this only records what the note already contains.
+    There is NO ABDM lookup, verification or integration of any kind.
+    """
+    m = _ABHA_ADDR.search(low)
+    if m:
+        return m.group(0)
+    m = _ABHA_ID.search(line.translate(_HINDI_DIGITS))
+    if m:
+        return "-".join(m.groups())
+    return ""
 
 
 def _parse_due(low: str, today: date) -> date | None:
@@ -157,14 +210,27 @@ def parse_line(line: str, today: date) -> Patient | None:
             village = part.title()
             break
 
+    danger_signs = _find_danger_signs(low)
+    # Feet/leg or unspecified swelling (audit H2): not a danger sign on
+    # its own, but worth a scored "watch" reason so the worker checks
+    # for face/hands swelling at the visit. Negated mentions ("no
+    # swelling") are the worker recording its absence — skip those too.
+    swell_idx = low.find("swelling")
+    if swell_idx == -1:
+        swell_idx = low.find("soojan")
+    if swell_idx != -1 and "swelling of face/hands" not in danger_signs \
+            and not _is_negated(low, swell_idx, swell_idx + 7):
+        risks.append("swelling noted — watch for face/hands swelling")
+
     phone_m = re.search(r"\b[6-9]\d{9}\b", line)
     return Patient(
         name=name, category=category, village=village,
         age_years=age_years, age_months=age_months,
         phone=phone_m.group(0) if phone_m else "",
+        abha_id=_find_abha(line, low),
         due_date=_parse_due(low, today),
         due_label=_due_label(low, category),
-        risk_factors=risks, danger_signs=_find_danger_signs(low),
+        risk_factors=risks, danger_signs=danger_signs,
         missed_doses=missed, months_pregnant=months_pregnant,
         raw_note=line,
     )
