@@ -6,8 +6,10 @@ Docs: http://localhost:8000/docs
 UI:   http://localhost:8000/  (phone-browser form, no JavaScript)
 
 Security note: this demo service has NO authentication and must not be
-exposed publicly with real patient notes. It is stateless — nothing
-submitted is stored anywhere.
+exposed publicly with real patient notes. The /plan flow is stateless —
+nothing submitted is stored. The /loop endpoints (screening-to-care
+tracker) keep records in process memory only, for the demo; a restart
+clears them, and they are equally unsuitable for real patient data.
 """
 from __future__ import annotations
 
@@ -22,12 +24,21 @@ from pydantic import BaseModel
 from . import ui
 from .agent import SehatSathiAgent
 from .helplines import HELPLINES
+from .loop import ScreeningLoop
 
-app = FastAPI(title="SehatSathi", version="1.2.0",
+app = FastAPI(title="SehatSathi", version="1.3.0",
               description="AI follow-up agent for India's frontline health workers (ASHA/ANM).")
 app.add_middleware(GZipMiddleware, minimum_size=512)
 agent = SehatSathiAgent()
 _SAMPLE = Path(__file__).resolve().parents[2] / "data" / "sample_notes.txt"
+_SAMPLE_SCREENING = (Path(__file__).resolve().parents[2]
+                     / "data" / "sample_screening_list.txt")
+
+# Screening-to-care loop store (Future Health challenge build). One
+# in-memory ScreeningLoop per process: a prototype demo store. NOTHING
+# here is durable — restarting the service clears every tracked record,
+# and it must never be used with real patient data.
+loop = ScreeningLoop()
 
 # Audit M5: a day's notes are a page of text, never 100 KB. Anything
 # larger is a mistake or abuse on a public endpoint.
@@ -83,6 +94,125 @@ def helplines() -> dict:
 @app.get("/", response_class=HTMLResponse)
 def index(lang: str = "en") -> str:
     return ui.index_page(lang)
+
+
+# ---- Screening-to-care loop (Future Health challenge build) --------
+
+class IntakeRequest(BaseModel):
+    list_text: str
+    today: str | None = None  # YYYY-MM-DD, optional — for reproducible demos
+
+
+class AdvanceRequest(BaseModel):
+    name: str
+    village: str = ""
+    today: str | None = None
+
+
+@app.post("/screening/intake")
+def screening_intake(req: IntakeRequest) -> dict:
+    _check_size(req.list_text)
+    result = loop.intake(req.list_text, _parse_today(req.today))
+    return {"intake": result, "loop": loop.to_dict()}
+
+
+@app.get("/loop")
+def loop_state() -> dict:
+    return loop.to_dict()
+
+
+@app.post("/loop/refer")
+def loop_refer(req: AdvanceRequest) -> dict:
+    try:
+        rec = loop.refer(req.name, _parse_today(req.today), req.village)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"record": rec.to_dict(), "loop": loop.to_dict()}
+
+
+@app.post("/loop/confirm")
+def loop_confirm(req: AdvanceRequest) -> dict:
+    try:
+        rec = loop.confirm_care(req.name, _parse_today(req.today), req.village)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"record": rec.to_dict(), "loop": loop.to_dict()}
+
+
+@app.get("/loop/closure")
+def loop_closure(today: str | None = None) -> dict:
+    return loop.closure_summary(_parse_today(today))
+
+
+@app.post("/loop/reset")
+def loop_reset() -> dict:
+    global loop
+    loop = ScreeningLoop()
+    return {"loop": loop.to_dict()}
+
+
+@app.get("/loop/demo")
+def loop_demo() -> dict:
+    """End-to-end loop demo on the synthetic camp list, in a throwaway
+    ScreeningLoop so the shared store is untouched: intake → one
+    referral recorded → one care confirmation → closure summary."""
+    demo_loop = ScreeningLoop()
+    text = _SAMPLE_SCREENING.read_text(encoding="utf-8") \
+        if _SAMPLE_SCREENING.exists() else ""
+    day = date(2026, 11, 6)
+    intake = demo_loop.intake(text, day)
+    demo_loop.refer("Rekha Kumari", day)
+    demo_loop.confirm_care("Rekha Kumari", day)
+    return {"intake": intake, "loop": demo_loop.to_dict(),
+            "closure": demo_loop.closure_summary(day),
+            "closure_report": demo_loop.closure_report(day)}
+
+
+@app.get("/loop/ui", response_class=HTMLResponse)
+def loop_ui() -> str:
+    return ui.loop_page(loop, date.today())
+
+
+@app.post("/loop/ui/intake", response_class=HTMLResponse)
+async def loop_ui_intake(request: Request) -> str:
+    from urllib.parse import parse_qs
+    fields = parse_qs((await request.body()).decode("utf-8", "replace"))
+    text = fields.get("list", [""])[0]
+    today_raw = fields.get("today", [""])[0]
+    _check_size(text)
+    today = _parse_today(today_raw)
+    result = loop.intake(text, today)
+    msg = (f"Intake done: {len(result['added'])} added"
+           + (f", {len(result['duplicates_skipped'])} already tracked (kept as-is)"
+              if result["duplicates_skipped"] else "")
+           + (f", {len(result['unparsed_lines'])} line(s) could not be read"
+              if result["unparsed_lines"] else "") + ".")
+    return ui.loop_page(loop, today, message=msg)
+
+
+@app.post("/loop/ui/advance", response_class=HTMLResponse)
+async def loop_ui_advance(request: Request) -> str:
+    from urllib.parse import parse_qs
+    fields = parse_qs((await request.body()).decode("utf-8", "replace"))
+    name = fields.get("name", [""])[0]
+    action = fields.get("action", [""])[0]
+    today = _parse_today(fields.get("today", [""])[0])
+    try:
+        if action == "refer":
+            loop.refer(name, today)
+            msg = f"{name}: marked referred."
+        elif action == "confirm":
+            loop.confirm_care(name, today)
+            msg = f"{name}: care confirmed — loop closed."
+        else:
+            msg = "Unknown action."
+    except (KeyError, ValueError) as e:
+        msg = str(e)
+    return ui.loop_page(loop, today, message=msg)
 
 
 @app.post("/ui", response_class=HTMLResponse)

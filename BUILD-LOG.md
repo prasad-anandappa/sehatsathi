@@ -31,7 +31,9 @@ deployment claimed — README and SUBMISSION.md both state this plainly.
 ## Remaining (owner / parent)
 - [ ] Prasad: sign up at agentfoundry.me, create "SehatSathi" project,
       open this repo inside the IDE, screenshot (build-evidence).
-- [ ] Deploy API (any cloud; Dockerfile included) → live demo link.
+- [x] Deploy API (any cloud; Dockerfile included) → live demo link.
+  Done 2026-11-06: http://139.84.151.153:8105 (VPS, systemd
+  `sehatsathi.service`, port 8105, enabled at boot).
 - [ ] Record 2–3 min demo per DEMO-SCRIPT.md.
 - [ ] File submission issue (SUBMISSION.md fields) before 15 Nov 2026.
 
@@ -61,3 +63,26 @@ deployment claimed — README and SUBMISSION.md both state this plainly.
   "provisional" — their own translators rated them medium confidence.
   Verified set is now 12 (en, hi, kn, bn, gu, mr, pa, ta, te, ml, ne,
   ur); provisional 11. Status lives in i18n.py LANGUAGE_META.
+
+## v1.3.0 — 2026-11-06 · Screening-to-care loop layer (Future Health challenge window)
+
+- New module `loop.py`: screening-intake mode (a camp/PHC list becomes
+  one tracked record per person; a line marked "referred" enters as
+  referred, "not referred" stays screened; re-intake never overwrites
+  a tracked record), a forward-only three-state tracker (screened →
+  referred → care confirmed) whose daily plan is driven by whoever is
+  still unconfirmed, and a day-end closure summary + readable closure
+  report naming everyone still open.
+- API: POST /screening/intake · GET /loop · POST /loop/refer ·
+  POST /loop/confirm · GET /loop/closure · POST /loop/reset ·
+  GET /loop/demo (throwaway-loop demo on the synthetic camp list).
+  Loop store is in-memory per process (prototype demo store — a
+  restart clears it; stated in the API docstring).
+- UI: "Screening camp mode" page at /loop/ui (no JavaScript, same
+  design rules): intake form, tracked-record cards with refer/confirm
+  buttons, day-end closure section. Linked from the index page.
+- Sample data: `data/sample_screening_list.txt` (8 synthetic camp
+  entries). Tests: 49 → 67 (18 new in tests/test_loop.py), all green.
+- Deployed: /opt/sehatsathi on the VPS, venv + systemd service on
+  port 8105; public URL verified end-to-end (intake → refer →
+  confirm → closure over the public interface).

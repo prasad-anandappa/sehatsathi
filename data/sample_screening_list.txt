@@ -1,0 +1,11 @@
+# Screening camp list — Rampur PHC cluster, 2026-11-06 (sample / synthetic data)
+# One person per line, the way the camp register is kept. Lines marked
+# "referred" enter the loop tracker in the referred state.
+Sunita Devi, Rampur, pregnant 8 months, high BP, severe headache, ANC checkup due in 2 days, referred to PHC
+Rekha Kumari, Rampur, pregnant 5 months, low HB, iron tablets follow-up due in 4 days
+Ramesh Kumar, Kishanpur, TB patient, missed 2 doses, DOTS review due tomorrow, referred to PHC
+Sita Devi, Kishanpur, TB patient, DOTS review due in 6 days
+Aarav, Rampur, child 18 months, measles vaccine due on 2026-11-10
+Priya, Kishanpur, child 9 months, immunization overdue by 5 days, referred to PHC
+Kamla Bai, Rampur, 62 years, BP medicine refill due in 3 days
+Mohan Lal, Kishanpur, 70 years, diabetes, sugar test due in 7 days

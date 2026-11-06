@@ -104,6 +104,10 @@ def index_page(lang: str = "en") -> str:
         + '<input type="date" id="today" name="today">'
         + '<button type="submit">' + _esc(ui["button"]) + "</button></form>"
         + '<p class="small">' + _esc(ui["demo_note"]) + "</p>"
+        + '<p><a href="/loop/ui"><b>Screening camp mode</b> — track the '
+          "screening-to-care loop: intake a camp list, record referrals, "
+          "confirm care, and get a day-end closure summary that names "
+          "everyone still open →</a></p>"
         + _helpline_footer(lang)
     )
 
@@ -149,4 +153,98 @@ def result_page(report: Report, lang: str = "en") -> str:
                    + _esc(", ".join(s["deferred_patients"])) + "</p>")
     out.append('<p><a href="/?lang=' + lang + '">← ' + _esc(ui["back"]) + "</a></p>")
     out.append(_helpline_footer(lang))
+    return "\n".join(out)
+
+
+# ---- Screening-to-care loop page (Future Health challenge build) ----
+# Chrome is English-only for now (the localised string tables are a
+# closed set, gated by tests); patient reminders on the cards still
+# render in every shipped language exactly as in the notes flow.
+
+_STATE_BADGE = {"screened": "🔵 Screened", "referred": "🟠 Referred",
+                "care confirmed": "✅ Care confirmed"}
+
+
+def loop_page(loop_obj, today, message: str = "") -> str:
+    from .loop import LoopState  # local import: ui stays import-light
+    out = [_head("en"),
+           '<p><a href="/">← Follow-up planner</a></p>',
+           "<h2>Screening-to-care loop</h2>",
+           "<p>Intake a screening camp or PHC list — one person per line, "
+           "the way the register is kept. Every person is tracked through "
+           "<b>screened → referred → care confirmed</b>, and the day-end "
+           "closure summary names anyone still open. Records and "
+           "reminders only: SehatSathi gives no diagnosis and no "
+           "treatment advice.</p>"]
+    if message:
+        out.append("<div class='card'><b>" + _esc(message) + "</b></div>")
+    out.append(
+        '<form method="post" action="/loop/ui/intake">'
+        '<label for="list"><b>Screening list</b></label>'
+        '<textarea id="list" name="list" required placeholder="Sunita Devi, '
+        'Rampur, pregnant 8 months, ANC checkup due in 2 days, referred to PHC">'
+        "</textarea>"
+        '<label for="today"><b>Date</b></label>'
+        '<input type="date" id="today" name="today" value="'
+        + today.isoformat() + '">'
+        '<button type="submit">Intake this list</button></form>')
+
+    records = loop_obj.records()
+    if records:
+        counts = loop_obj.counts()["by_state"]
+        out.append("<h2>Tracked: " + _esc(loop_obj.counts()["tracked"])
+                   + " · Screened: " + _esc(counts["screened"])
+                   + " · Referred: " + _esc(counts["referred"])
+                   + " · Care confirmed: " + _esc(counts["care confirmed"])
+                   + "</h2>")
+        for rec in records:
+            f = rec.followup
+            cls = {"CRITICAL": "crit", "HIGH": "high",
+                   "MEDIUM": "med", "LOW": "low"}[f.priority.value]
+            card = ("<div class='card " + cls + "'><b>" + _esc(rec.patient.name)
+                    + "</b> (" + _esc(rec.patient.village) + ") · "
+                    + _esc(_STATE_BADGE[rec.state.label]) + " · "
+                    + _esc(f.priority.value) + "<br><span class='small'>"
+                    + _esc("; ".join(f.reasons)) + "</span><br>"
+                    + _esc(f.reminder_en))
+            if rec.patient.danger_signs:
+                card += ("<br>🚨 <b>Danger signs:</b> "
+                         + _esc(", ".join(rec.patient.danger_signs))
+                         + " — escalate to a human at the PHC today.")
+            if rec.state is LoopState.SCREENED:
+                card += ('<form method="post" action="/loop/ui/advance">'
+                         '<input type="hidden" name="name" value="'
+                         + _esc(rec.patient.name) + '">'
+                         '<input type="hidden" name="action" value="refer">'
+                         '<input type="hidden" name="today" value="'
+                         + today.isoformat() + '">'
+                         '<button type="submit">Mark referred</button></form>')
+            elif rec.state is LoopState.REFERRED:
+                card += ('<form method="post" action="/loop/ui/advance">'
+                         '<input type="hidden" name="name" value="'
+                         + _esc(rec.patient.name) + '">'
+                         '<input type="hidden" name="action" value="confirm">'
+                         '<input type="hidden" name="today" value="'
+                         + today.isoformat() + '">'
+                         '<button type="submit">Confirm care received</button></form>')
+            out.append(card + "</div>")
+
+        s = loop_obj.closure_summary(today)
+        out.append("<h2>Day-end closure — " + _esc(s["date"]) + "</h2>")
+        out.append("<p>Screened today: <b>" + _esc(s["screened_today"])
+                   + "</b> · Referred today: <b>" + _esc(s["referred_today"])
+                   + "</b> · Care confirmed today: <b>"
+                   + _esc(s["care_confirmed_today"]) + "</b></p>")
+        if s["still_open"]:
+            out.append("<p><b>Still open — carries to tomorrow:</b></p><ul>")
+            for d in s["still_open"]:
+                out.append("<li><b>" + _esc(d["name"]) + "</b> ("
+                           + _esc(d["village"]) + ") — " + _esc(d["state"])
+                           + " · " + _esc(d["priority"]) + " · "
+                           + _esc(d["due_label"]) + "</li>")
+            out.append("</ul>")
+        else:
+            out.append("<p>✅ <b>Loop fully closed</b> — every screened "
+                       "person has confirmed care.</p>")
+    out.append(_helpline_footer("en"))
     return "\n".join(out)
