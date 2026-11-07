@@ -146,9 +146,12 @@ def test_closure_report_names_open_and_closes_cleanly():
 # ---- API -----------------------------------------------------------------
 
 @pytest.fixture()
-def client():
-    api_module.loop = ScreeningLoop()   # isolate the shared store per test
-    return TestClient(api_module.app)
+def client(tmp_path):
+    # v1.4.0: the loop store is durable (per-worker, in the DB), so
+    # isolation = a fresh app on a throwaway database file per test.
+    from sehatsathi.config import Settings
+    settings = Settings(database_url=f"sqlite:///{tmp_path}/test.db")
+    return TestClient(api_module.create_app(settings))
 
 
 def test_api_loop_flow(client):

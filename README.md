@@ -58,11 +58,13 @@ PYTHONPATH=src python3 -m sehatsathi.cli --notes data/sample_notes.txt --date 20
 
 # 2) Tests (needs pytest; API tests also need fastapi/httpx)
 pip install -e ".[dev,api]"
-pytest -q            # 49 tests
+pytest -q            # 79 tests
 
 # 3) API / deployed form
 uvicorn sehatsathi.api:app --port 8000     # after: pip install -e ".[api]"
 #    → GET /health · GET /demo · POST /plan {"notes": "...", "today": "2026-11-02"}
+#    → screening-to-care loop: POST /screening/intake · GET /loop ·
+#      POST /loop/refer · POST /loop/confirm · GET /loop/closure
 #    → interactive docs at http://localhost:8000/docs
 ```
 
@@ -71,6 +73,34 @@ escalations** found (a pregnant mother with severe headache + facial
 swelling, a TB patient coughing blood, a postpartum mother whose baby is
 not feeding), a 10-visit timed route for the next day, and 10 reminders —
 each written in all 23 languages.
+
+## Production build (v1.4.0)
+
+The screening-to-care loop shipped in v1.3.0 for the Future Health
+challenge as an **in-memory demo store**. v1.4.0 makes the deployed
+service production-shaped (full detail + verification evidence in
+[`AUDIT.md`](AUDIT.md)):
+
+- **Durable storage** — one `DurableScreeningLoop` per worker, mirrored
+  into SQLAlchemy (SQLite file by default, Postgres via
+  `SEHATSATHI_DATABASE_URL`) after every mutation: cases, guarded
+  state transitions (screened → referred → care confirmed), visit
+  notes and follow-up plans all survive restarts. Nightly on-box DB
+  backups (InvoicePilot pattern).
+- **Worker accounts** — phone + OTP login (`SEHATSATHI_AUTH_MODE=otp`):
+  hashed codes with expiry + attempt caps, hashed expiring session
+  tokens, per-worker case isolation. A **supervisor** role (phones in
+  `SEHATSATHI_SUPERVISOR_PHONES`) gets a read-only aggregate view —
+  counts and closure summaries, **never visit-note contents**.
+- **Demo surfaces stay demo** — `/demo`, `/loop/demo` and the no-JS
+  loop UI run on synthetic/throwaway data only, labelled as such.
+- **Hardening** — app-level rate limiting, security headers, `.env`
+  via a 600-permission EnvironmentFile, log rotation. The one
+  remaining external step is a DNS A record for
+  `sehatsathi.nammaprojects.com` (nginx vhost + rate-limit zone are
+  prepared on the server); OTP *delivery* needs one credential
+  (SMTP mailbox / Brevo / Twilio) in that same env file — until then
+  `/auth/request-otp` answers an honest 503 instead of faking a send.
 
 ## Languages (23)
 
@@ -133,9 +163,12 @@ the offline design means a pilot needs no infrastructure beyond a phone.
 ```
 src/sehatsathi/  extract.py · risk.py · planner.py · messages.py
                  helplines.py · ui.py · i18n.py · langs/ (23 languages)
-                 llm.py (optional) · agent.py (orchestrator) · cli.py · api.py
-tests/           49 pytest tests (extraction, risk, India features,
-                 languages, UI, API)
+                 llm.py (optional) · agent.py (orchestrator) · cli.py
+                 api.py (FastAPI shell) · loop.py (loop logic) ·
+                 loop_store.py (durable per-worker store) · db.py ·
+                 auth.py · otp.py · config.py (production layer)
+tests/           79 pytest tests (extraction, risk, India features,
+                 languages, UI, API, loop, production layer)
 data/            sample_notes.txt — one synthetic day of ASHA notes
 ```
 

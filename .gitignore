@@ -10,3 +10,7 @@ build/
 .env.*
 !.env.example
 .DS_Store
+# Local runtime databases (production DB lives on the server only)
+data/*.db
+data/*.db-journal
+data/*.db-wal

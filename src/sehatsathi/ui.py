@@ -165,17 +165,24 @@ _STATE_BADGE = {"screened": "🔵 Screened", "referred": "🟠 Referred",
                 "care confirmed": "✅ Care confirmed"}
 
 
-def loop_page(loop_obj, today, message: str = "") -> str:
+def loop_page(loop_obj, today, message: str = "", demo: bool = False) -> str:
     from .loop import LoopState  # local import: ui stays import-light
     out = [_head("en"),
            '<p><a href="/">← Follow-up planner</a></p>',
-           "<h2>Screening-to-care loop</h2>",
+           "<h2>Screening-to-care loop</h2>"]
+    if demo:
+        out.append(
+            "<div class='card'><b>Demo page — synthetic data only.</b> "
+            "This public page never shows a real worker's records; "
+            "signed-in workers' cases are stored privately and durably "
+            "behind login.</div>")
+    out.append(
            "<p>Intake a screening camp or PHC list — one person per line, "
            "the way the register is kept. Every person is tracked through "
            "<b>screened → referred → care confirmed</b>, and the day-end "
            "closure summary names anyone still open. Records and "
            "reminders only: SehatSathi gives no diagnosis and no "
-           "treatment advice.</p>"]
+           "treatment advice.</p>")
     if message:
         out.append("<div class='card'><b>" + _esc(message) + "</b></div>")
     out.append(

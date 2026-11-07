@@ -1,5 +1,4 @@
-# Core agent: NO dependencies (offline, deterministic, stdlib only).
-# API extra:
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2
+sqlalchemy>=2.0

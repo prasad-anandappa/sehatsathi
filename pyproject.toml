@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sehatsathi"
-version = "1.3.0"
+version = "1.4.0"
 description = "AI follow-up agent for India's frontline health workers (ASHA/ANM)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,7 +13,7 @@ authors = [{ name = "Prasad Dimba Anandappa" }]
 dependencies = []
 
 [project.optional-dependencies]
-api = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2"]
+api = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2", "sqlalchemy>=2.0"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
