@@ -108,6 +108,21 @@ service production-shaped (full detail + verification evidence in
   left is the real supervisors' phone numbers
   (`SEHATSATHI_SUPERVISOR_PHONES`, currently unset).
 
+**v1.4.1 — as-user audit fixes (2026-11-06).** The deployed service
+was audited the way its users meet it (worker on a phone browser,
+supervisor, judge) and every finding was fixed: a no-JS **worker
+sign-in + pages** (`/login` → `/worker`; v1.4.0 login was API-only),
+the public loop demo is now **scoped per browser** (it was one list
+shared by all visitors) with a plain "use made-up names" warning,
+**provisional languages are marked** in the picker and on the page,
+a phone-only OTP request on this email-delivery deployment gets a
+clear "enter your email" message (was a false "no channel
+configured" 502), browser form errors render as pages (not raw
+JSON), workers can **remove one wrong record** (`POST /loop/remove`)
+instead of only wiping the whole loop, the loop page leads with the
+chosen language's reminder, and `/demo` labels its synthetic data
+in the payload. Detail + live re-verification in `AUDIT.md`.
+
 ## Languages (23)
 
 Reminders, caregiver notes and the web UI ship in English + all 22

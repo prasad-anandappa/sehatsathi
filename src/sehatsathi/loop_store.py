@@ -138,6 +138,11 @@ class DurableScreeningLoop(ScreeningLoop):
         self._sync()
         return rec
 
+    def remove(self, name: str, village: str = "") -> LoopRecord:
+        rec = super().remove(name, village)
+        self._sync()
+        return rec
+
     def reset(self) -> None:
         """Drop every tracked record for this worker (memory + DB)."""
         self._records.clear()

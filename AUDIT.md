@@ -112,3 +112,62 @@ The two open wires from the hardening pass are closed:
    unset — no real numbers are known to the deployer.
 2. A medical review of danger-sign lists before any clinical
    deployment (standing requirement from the README; unchanged).
+
+## As-user audit (v1.4.1, 2026-11-06)
+
+The live service was audited as its users — ASHA worker on a phone
+browser, supervisor, member of the public/judge — against the
+deployed build (verified identical to repo HEAD before testing).
+Every finding below was reproduced live first, then fixed, then
+re-verified with the same test that exposed it. Suite: 79 → 89
+tests (`tests/test_as_user_audit.py`).
+
+**Verified sound (no change):** safety fence (treatment/diagnosis
+demands typed into notes and intake lines produce no advice — the
+patients are escalated on their recorded danger signs instead);
+danger-sign prioritisation (CRITICAL first in plan, loop and
+closure `open_escalations`); guarded forward-only transitions via
+API and UI; duplicates never overwrite state; OTP wrong / expired /
+consumed codes, 5-attempt cap, 5-requests/hour/phone cap, logout
+revocation, expired session tokens; cross-worker isolation (another
+worker's case = 404, own loop empty); worker → supervisor view 403;
+supervisor aggregates byte-exact vs worker data with a planted
+visit-note marker provably absent; real `systemctl restart`
+survival of records, states, closure and session tokens; nightly
+backup present with cron + logrotate; localised reminders lead the
+notes result page with the English record copy below.
+
+**Fixed:**
+
+| # | Severity | Finding (live evidence) → fix |
+|---|---|---|
+| A1 | HIGH | `/loop/ui` demo loop was ONE store shared by all visitors: a name intaked in one request was listed to a separate cookieless request, and the home page pitched the page as the way to "track" a camp list → demo loops are now scoped per browser (opaque cookie, capped dict), the banner says plainly to use made-up names and never real patient details, and the home-page pitch now calls it a demo |
+| A2 | MAJOR | OTP login existed only as JSON API: no browser sign-in, no browser access to a worker's own durable records → no-JS `/login` (phone+email → code → HttpOnly/SameSite cookie) and `/worker` pages (own loop: intake / refer / confirm / remove / closure, visit-notes → plan saved to history, sign-out that revokes server-side) |
+| A3 | MAJOR | Provisional-language honesty label never reached the user: "provisional" appeared on zero served pages; all 23 picker entries looked identical → picker marks provisional languages and a selected provisional language carries an on-page notice; verified languages unchanged |
+| A4 | MAJOR | Phone-only OTP request → 502 "no OTP delivery channel is configured on this deployment" (false — the channel was configured; the missing input was the email) → 422 "Please enter your email address — on this deployment the login code is sent by email", checked before any send attempt |
+| A5 | MINOR | Browser form errors returned raw JSON (bad date → 400 `{"detail":…}`, oversize → 413) → `/ui`, `/loop/ui/*` and `/worker/*` handlers re-render the page with the message |
+| A6 | MINOR | `str(KeyError)` repr quotes leaked into API 404 details and page messages (`"no tracked person named 'X' — …"` wrapped in stray quotes) → `_detail()` unwraps in all handlers |
+| A7 | MINOR | A mistyped register line became a tracked "person" (any non-empty line parses) and the only remedy was wiping the whole loop → `POST /loop/remove` + a remove button per record (worker and demo pages). Intake still never drops a line automatically — a name-only register line is a real screened person, and silently dropping people is the worse failure in this product |
+| A8 | MINOR | Loop page was English-only and showed only the English reminder → language picker on the page; cards lead with the chosen language's reminder + caregiver note, English record copy below (same pattern as the notes result page). Headings/buttons stay English pending reviewed translations |
+| A9 | MINOR | `/demo` JSON carried no synthetic-data marker (the web page and `/loop/demo` did) → payload now carries `demo_data: true` + note |
+| A10 | MINOR | Two hardcoded English paragraphs (paste guidance, screening pitch) sat inside every non-English index page → non-English pages drop the English prose and keep their localised tagline/labels/demo-note + a short feature-name link |
+
+**Not fixed — needs Prasad / human process (not code):**
+reviewed translations for the remaining English chrome (result-page
+counter line, loop-page headings/buttons, helpline names) — the
+i18n honesty model forbids dropping unreviewed strings into tables
+labelled "verified", so this rides the same native-speaker review
+as the provisional languages. Supervisor phones and the danger-sign
+medical review remain as listed above.
+
+**Informational:** `/demo` is 427 KB raw / 43 KB with the gzip
+browsers actually negotiate; page timings over the public hostname
+from the audit VM (proxy path) were 1.5–2.9 s with 4–10 KB pages —
+the payloads are small; the latency is the network path, not the
+app. Swagger `/docs` remains public, as intended for a judged API.
+
+**Flutter-app contract notes:** `POST /loop/remove` is new;
+404 details are now quote-free plain text; OTP login requires an
+email address on this deployment (422 says so) — the app must
+collect one at request time; session tokens live 30 days and
+`POST /auth/logout` revokes them.

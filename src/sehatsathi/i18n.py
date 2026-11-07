@@ -99,3 +99,16 @@ def language_options() -> list[tuple[str, str, str]]:
     ]
     opts.sort(key=lambda t: (t[0] != "en", t[2]))
     return opts
+
+
+def verification_status(code: str | None) -> str:
+    """'verified' | 'provisional' for a language code (English default).
+
+    The as-user audit (2026-11-06) found this status lived only in
+    this registry — no served page ever showed it. The UI now marks
+    provisional languages in the picker and says so on the page, so
+    the honesty label reaches the user it was written for.
+    """
+    if code in LANGUAGE_META:
+        return LANGUAGE_META[code][1]
+    return "verified"

@@ -220,6 +220,17 @@ class ScreeningLoop:
             raise ValueError(f"{rec.patient.name}: care already confirmed")
         return self.advance(name, on, village, note="care confirmed")
 
+    def remove(self, name: str, village: str = "") -> LoopRecord:
+        """Remove ONE tracked record — the worker correcting her own
+        register (a mistyped line, a duplicate under a spelling
+        variant). As-user audit 2026-11-06: until now the only remedy
+        for a wrong entry was wiping the whole loop. Nothing is ever
+        removed automatically; this is the worker's deliberate act,
+        and intake still never drops a line on its own."""
+        rec = self._find(name, village)
+        del self._records[rec.key]
+        return rec
+
     # ---- views -------------------------------------------------------
 
     def records(self) -> list[LoopRecord]:

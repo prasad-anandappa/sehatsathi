@@ -163,6 +163,14 @@ class OtpSenderChain:
     def has_real_channel(self) -> bool:
         return bool(self._email_senders or self._sms_sender)
 
+    @property
+    def has_sms_channel(self) -> bool:
+        return self._sms_sender is not None
+
+    @property
+    def has_email_channel(self) -> bool:
+        return bool(self._email_senders)
+
     def send(self, *, phone: str, code: str, email: str | None) -> str:
         if email and self._email_senders:
             return self._email_senders[0].send(phone=phone, code=code,

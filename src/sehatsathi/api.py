@@ -1,8 +1,9 @@
-"""FastAPI service — SehatSathi production API (v1.4.0).
+"""FastAPI service — SehatSathi production API (v1.4.1).
 
 Run:  uvicorn sehatsathi.api:app --host 0.0.0.0 --port 8105
 Docs: http://localhost:8105/docs
 UI:   http://localhost:8105/  (phone-browser demo pages, no JavaScript)
+      http://localhost:8105/login (worker sign-in — OTP form, no JS)
 
 Production posture (changed in v1.4.0 — the v1.3.0 header warned the
 demo store was in-memory and unsuitable for real patient data):
@@ -28,6 +29,7 @@ X-Worker-Phone / X-Worker-Id headers and defaults to a shared
 """
 from __future__ import annotations
 
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -36,7 +38,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -102,6 +104,15 @@ def _check_size(notes: str) -> None:
                                    "notes at a time")
 
 
+def _detail(e: BaseException) -> str:
+    """User-facing message for an exception. str(KeyError) wraps the
+    message in repr quotes ('\"no tracked person named ...\"'), which
+    leaked into API details and page messages — unwrap it."""
+    if isinstance(e, KeyError) and e.args:
+        return str(e.args[0])
+    return str(e)
+
+
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     """Per-IP sliding-window limit. /health is exempt; the OTP
     request endpoint gets its own stricter bucket (on top of the
@@ -162,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     current_worker = make_current_worker(settings, auth)
 
     app = FastAPI(
-        title="SehatSathi", version="1.4.0",
+        title="SehatSathi", version="1.4.1",
         description="AI follow-up agent for India's frontline health "
                     "workers (ASHA/ANM).")
     app.add_middleware(GZipMiddleware, minimum_size=512)
@@ -185,23 +196,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 _loops[worker_id] = loop_obj
             return loop_obj
 
-    # Demo loop for the public no-JS UI: synthetic data only, clearly
+    # Demo loops for the public no-JS UI: synthetic data only, clearly
     # labelled on the page, never a worker's real records.
-    demo_loop = ScreeningLoop()
+    # As-user audit 2026-11-06 (HIGH): this used to be ONE loop shared
+    # by every visitor on Earth — anything one visitor typed was
+    # listed to all the others, and the home page pitched the page as
+    # the way to "track" a camp list. Each browser now gets its own
+    # demo loop, keyed by an opaque cookie; the cap keeps a busy day
+    # from growing the dict without bound (oldest evicted first).
+    class _DemoLoops:
+        def __init__(self, cap: int = 100):
+            self._loops: dict[str, ScreeningLoop] = {}
+            self._cap = cap
+
+        def get(self, token: str | None) -> tuple[str, ScreeningLoop, bool]:
+            if token and token in self._loops:
+                return token, self._loops[token], False
+            token = secrets.token_urlsafe(16)
+            loop_obj = ScreeningLoop()
+            self._loops[token] = loop_obj
+            while len(self._loops) > self._cap:
+                self._loops.pop(next(iter(self._loops)))
+            return token, loop_obj, True
+
+    demo_loops = _DemoLoops()
+
+    def _demo_response(page: str, token: str, is_new: bool) -> HTMLResponse:
+        resp = HTMLResponse(page)
+        if is_new:
+            resp.set_cookie("ss_demo", token, max_age=7 * 24 * 3600,
+                            path="/loop", httponly=True, samesite="lax")
+        return resp
 
     # ---- public / demo surfaces -------------------------------------
 
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "service": "sehatsathi",
-                "offline_core": True, "version": "1.4.0",
+                "offline_core": True, "version": "1.4.1",
                 "storage": "durable", "auth_mode": settings.auth_mode}
 
     @app.get("/demo")
     def demo() -> dict:
-        """Judge surface: the sample-notes plan. Synthetic data only."""
+        """Judge surface: the sample-notes plan. Synthetic data only —
+        and now labelled in the payload itself, not just on the web
+        page (as-user audit 2026-11-06)."""
         notes = _SAMPLE.read_text(encoding="utf-8") if _SAMPLE.exists() else ""
-        return agent.run(notes, today=date(2026, 11, 2)).to_dict()
+        report = agent.run(notes, today=date(2026, 11, 2)).to_dict()
+        return {"demo_data": True,
+                "note": "Synthetic sample notes only — not a real "
+                        "worker's records.",
+                **report}
 
     @app.get("/helplines")
     def helplines() -> dict:
@@ -224,8 +269,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         notes = fields.get("notes", [""])[0]
         today = fields.get("today", [""])[0]
         lang = fields.get("lang", ["en"])[0]
-        _check_size(notes)
-        report = agent.run(notes, today=_parse_today(today))
+        try:
+            _check_size(notes)
+            report = agent.run(notes, today=_parse_today(today))
+        except HTTPException as e:
+            # Browser form: a raw JSON error body is a dead end on a
+            # phone — re-render the page with the message instead.
+            return ui.index_page(lang, message=str(e.detail))
         return ui.result_page(report, lang)
 
     # ---- auth ---------------------------------------------------------
@@ -250,6 +300,168 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                  if header.lower().startswith("bearer ") else "")
         auth.logout(token)
         return {"logged_out": True}
+
+    # ---- worker sign-in + pages (HTML, no-JS) -------------------------
+    # As-user audit 2026-11-06 (MAJOR): OTP login existed only as a
+    # JSON API — a health worker with a phone browser could not sign
+    # in or reach her own durable records at all. These routes are
+    # the browser door: the same AuthService, with the session token
+    # in an HttpOnly cookie (SameSite=Lax, so other sites' forms
+    # cannot ride it) instead of an Authorization header.
+
+    def _ui_worker(request: Request) -> WorkerContext | None:
+        if settings.auth_mode != "otp":
+            return WorkerContext(id="local-worker", phone="", role="worker")
+        return auth.worker_for_token(request.cookies.get("ss_session", ""))
+
+    async def _form_fields(request: Request) -> dict:
+        from urllib.parse import parse_qs
+        fields = parse_qs((await request.body()).decode("utf-8", "replace"))
+        return {k: v[0] for k, v in fields.items()}
+
+    def _intake_message(result: dict) -> str:
+        return (f"Intake done: {len(result['added'])} added"
+                + (f", {len(result['duplicates_skipped'])} already tracked "
+                   "(kept as-is)" if result["duplicates_skipped"] else "")
+                + (f", {len(result['unparsed_lines'])} line(s) could not "
+                   "be read" if result["unparsed_lines"] else "") + ".")
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_form() -> str:
+        return ui.login_page()
+
+    @app.post("/login/request", response_class=HTMLResponse)
+    async def login_request(request: Request) -> str:
+        fields = await _form_fields(request)
+        try:
+            result = auth.request_otp(fields.get("phone", ""),
+                                      fields.get("email", "") or None)
+        except HTTPException as e:
+            return ui.login_page(message=str(e.detail))
+        return ui.otp_page(result["phone"],
+                           message="Code sent — check your email.")
+
+    @app.post("/login/verify")
+    async def login_verify(request: Request):
+        fields = await _form_fields(request)
+        phone = fields.get("phone", "")
+        try:
+            result = auth.verify_otp(phone, fields.get("code", ""))
+        except HTTPException as e:
+            return HTMLResponse(ui.otp_page(phone, message=str(e.detail)))
+        resp = RedirectResponse("/worker", status_code=303)
+        resp.set_cookie(
+            "ss_session", result["token"],
+            max_age=settings.session_token_days * 24 * 3600,
+            path="/", httponly=True, samesite="lax",
+            secure=settings.env == "production")
+        return resp
+
+    @app.post("/worker/logout")
+    def worker_logout(request: Request):
+        auth.logout(request.cookies.get("ss_session", ""))
+        resp = RedirectResponse("/", status_code=303)
+        resp.delete_cookie("ss_session", path="/")
+        return resp
+
+    def _worker_page(loop_obj, today, message: str = "", lang: str = "en",
+                     worker: WorkerContext | None = None) -> str:
+        return ui.loop_page(loop_obj, today, message=message, lang=lang,
+                            base="/worker",
+                            signed_in=(worker.phone or worker.id)
+                            if worker else "")
+
+    @app.get("/worker")
+    def worker_home(request: Request, lang: str = "en"):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        return HTMLResponse(_worker_page(
+            worker_loop(worker.id), date.today(), lang=lang, worker=worker))
+
+    @app.post("/worker/intake")
+    async def worker_intake(request: Request):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        loop_obj = worker_loop(worker.id)
+        try:
+            _check_size(fields.get("list", ""))
+            today = _parse_today(fields.get("today", ""))
+            result = loop_obj.intake(fields.get("list", ""), today)
+            msg = _intake_message(result)
+        except HTTPException as e:
+            return HTMLResponse(_worker_page(
+                loop_obj, date.today(), message=str(e.detail), lang=lang,
+                worker=worker))
+        return HTMLResponse(_worker_page(
+            loop_obj, today, message=msg, lang=lang, worker=worker))
+
+    @app.post("/worker/advance")
+    async def worker_advance(request: Request):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        name = fields.get("name", "")
+        loop_obj = worker_loop(worker.id)
+        today = date.today()
+        try:
+            today = _parse_today(fields.get("today", ""))
+            if fields.get("action", "") == "refer":
+                loop_obj.refer(name, today)
+                msg = f"{name}: marked referred."
+            elif fields.get("action", "") == "confirm":
+                loop_obj.confirm_care(name, today)
+                msg = f"{name}: care confirmed — loop closed."
+            else:
+                msg = "Unknown action."
+        except HTTPException as e:
+            msg = str(e.detail)
+        except (KeyError, ValueError) as e:
+            msg = _detail(e)
+        return HTMLResponse(_worker_page(
+            loop_obj, today, message=msg, lang=lang, worker=worker))
+
+    @app.post("/worker/remove")
+    async def worker_remove(request: Request):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        loop_obj = worker_loop(worker.id)
+        try:
+            rec = loop_obj.remove(fields.get("name", ""))
+            msg = f"{rec.patient.name}: record removed."
+        except KeyError as e:
+            msg = _detail(e)
+        return HTMLResponse(_worker_page(
+            loop_obj, date.today(), message=msg, lang=lang, worker=worker))
+
+    @app.post("/worker/plan", response_class=HTMLResponse)
+    async def worker_plan(request: Request):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        loop_obj = worker_loop(worker.id)
+        try:
+            _check_size(fields.get("notes", ""))
+            today = _parse_today(fields.get("today", ""))
+        except HTTPException as e:
+            return _worker_page(loop_obj, date.today(),
+                                message=str(e.detail), lang=lang,
+                                worker=worker)
+        report = agent.run(fields.get("notes", ""), today=today)
+        store.save_visit_note(worker.id, fields.get("notes", ""),
+                              today.isoformat(), report.to_dict())
+        return ui.result_page(report, lang,
+                              back_href="/worker?lang=" + lang)
 
     # ---- the notes flow (per-worker history) ---------------------------
 
@@ -286,7 +498,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rec = loop_obj.refer(req.name, _parse_today(req.today),
                                  req.village)
         except KeyError as e:
-            raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=404, detail=_detail(e))
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return {"record": rec.to_dict(), "loop": loop_obj.to_dict()}
@@ -299,10 +511,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rec = loop_obj.confirm_care(req.name, _parse_today(req.today),
                                         req.village)
         except KeyError as e:
-            raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=404, detail=_detail(e))
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return {"record": rec.to_dict(), "loop": loop_obj.to_dict()}
+
+    @app.post("/loop/remove")
+    def loop_remove(req: AdvanceRequest,
+                    worker: WorkerContext = Depends(current_worker)) -> dict:
+        """Remove ONE of the worker's own records (her correction of
+        a mistyped/duplicate register line). Added by the as-user
+        audit 2026-11-06 — before this, the only remedy was the
+        all-or-nothing /loop/reset."""
+        loop_obj = worker_loop(worker.id)
+        try:
+            rec = loop_obj.remove(req.name, req.village)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=_detail(e))
+        return {"removed": rec.patient.name, "loop": loop_obj.to_dict()}
 
     @app.get("/loop/closure")
     def loop_closure(today: str | None = None,
@@ -377,45 +603,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "closure": throwaway.closure_summary(day),
                 "closure_report": throwaway.closure_report(day)}
 
-    @app.get("/loop/ui", response_class=HTMLResponse)
-    def loop_ui() -> str:
-        return ui.loop_page(demo_loop, date.today(), demo=True)
+    @app.get("/loop/ui")
+    def loop_ui(request: Request, lang: str = "en"):
+        token, loop_obj, is_new = demo_loops.get(
+            request.cookies.get("ss_demo"))
+        return _demo_response(
+            ui.loop_page(loop_obj, date.today(), demo=True, lang=lang),
+            token, is_new)
 
-    @app.post("/loop/ui/intake", response_class=HTMLResponse)
-    async def loop_ui_intake(request: Request) -> str:
-        from urllib.parse import parse_qs
-        fields = parse_qs((await request.body()).decode("utf-8", "replace"))
-        text = fields.get("list", [""])[0]
-        today_raw = fields.get("today", [""])[0]
-        _check_size(text)
-        today = _parse_today(today_raw)
-        result = demo_loop.intake(text, today)
-        msg = (f"Intake done: {len(result['added'])} added"
-               + (f", {len(result['duplicates_skipped'])} already tracked "
-                  "(kept as-is)" if result["duplicates_skipped"] else "")
-               + (f", {len(result['unparsed_lines'])} line(s) could not "
-                  "be read" if result["unparsed_lines"] else "") + ".")
-        return ui.loop_page(demo_loop, today, message=msg, demo=True)
-
-    @app.post("/loop/ui/advance", response_class=HTMLResponse)
-    async def loop_ui_advance(request: Request) -> str:
-        from urllib.parse import parse_qs
-        fields = parse_qs((await request.body()).decode("utf-8", "replace"))
-        name = fields.get("name", [""])[0]
-        action = fields.get("action", [""])[0]
-        today = _parse_today(fields.get("today", [""])[0])
+    @app.post("/loop/ui/intake")
+    async def loop_ui_intake(request: Request):
+        token, loop_obj, is_new = demo_loops.get(
+            request.cookies.get("ss_demo"))
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
         try:
-            if action == "refer":
-                demo_loop.refer(name, today)
+            _check_size(fields.get("list", ""))
+            today = _parse_today(fields.get("today", ""))
+            result = loop_obj.intake(fields.get("list", ""), today)
+            msg = _intake_message(result)
+        except HTTPException as e:
+            return _demo_response(
+                ui.loop_page(loop_obj, date.today(),
+                             message=str(e.detail), demo=True, lang=lang),
+                token, is_new)
+        return _demo_response(
+            ui.loop_page(loop_obj, today, message=msg, demo=True,
+                         lang=lang),
+            token, is_new)
+
+    @app.post("/loop/ui/advance")
+    async def loop_ui_advance(request: Request):
+        token, loop_obj, is_new = demo_loops.get(
+            request.cookies.get("ss_demo"))
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        name = fields.get("name", "")
+        today = date.today()
+        try:
+            today = _parse_today(fields.get("today", ""))
+            if fields.get("action", "") == "refer":
+                loop_obj.refer(name, today)
                 msg = f"{name}: marked referred."
-            elif action == "confirm":
-                demo_loop.confirm_care(name, today)
+            elif fields.get("action", "") == "confirm":
+                loop_obj.confirm_care(name, today)
                 msg = f"{name}: care confirmed — loop closed."
             else:
                 msg = "Unknown action."
+        except HTTPException as e:
+            msg = str(e.detail)
         except (KeyError, ValueError) as e:
-            msg = str(e)
-        return ui.loop_page(demo_loop, today, message=msg, demo=True)
+            msg = _detail(e)
+        return _demo_response(
+            ui.loop_page(loop_obj, today, message=msg, demo=True,
+                         lang=lang),
+            token, is_new)
+
+    @app.post("/loop/ui/remove")
+    async def loop_ui_remove(request: Request):
+        token, loop_obj, is_new = demo_loops.get(
+            request.cookies.get("ss_demo"))
+        fields = await _form_fields(request)
+        lang = fields.get("lang", "en")
+        try:
+            rec = loop_obj.remove(fields.get("name", ""))
+            msg = f"{rec.patient.name}: record removed."
+        except KeyError as e:
+            msg = _detail(e)
+        return _demo_response(
+            ui.loop_page(loop_obj, date.today(), message=msg, demo=True,
+                         lang=lang),
+            token, is_new)
 
     return app
 

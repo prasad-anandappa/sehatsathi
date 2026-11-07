@@ -74,6 +74,16 @@ class AuthService:
         if self.settings.env == "production" and not self.sender.has_real_channel:
             raise HTTPException(
                 503, "OTP delivery is not configured on this deployment yet.")
+        if (self.settings.env == "production" and not email
+                and not self.sender.has_sms_channel):
+            # As-user audit 2026-11-06: with email-only delivery, a
+            # phone-only request fell through to the sender chain and
+            # surfaced as a 502 claiming "no delivery channel is
+            # configured" — false, and a dead end for a worker with
+            # no email habit. Name the actual missing input instead.
+            raise HTTPException(
+                422, "Please enter your email address — on this "
+                     "deployment the login code is sent by email.")
         since = _now() - timedelta(hours=1)
         if (self.store.otp_request_count(phone, since)
                 >= self.settings.otp_requests_per_hour):
