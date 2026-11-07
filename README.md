@@ -95,12 +95,18 @@ service production-shaped (full detail + verification evidence in
 - **Demo surfaces stay demo** — `/demo`, `/loop/demo` and the no-JS
   loop UI run on synthetic/throwaway data only, labelled as such.
 - **Hardening** — app-level rate limiting, security headers, `.env`
-  via a 600-permission EnvironmentFile, log rotation. The one
-  remaining external step is a DNS A record for
-  `sehatsathi.nammaprojects.com` (nginx vhost + rate-limit zone are
-  prepared on the server); OTP *delivery* needs one credential
-  (SMTP mailbox / Brevo / Twilio) in that same env file — until then
-  `/auth/request-otp` answers an honest 503 instead of faking a send.
+  via a 600-permission EnvironmentFile, log rotation.
+- **Live at https://sehatsathi.nammaprojects.com** — DNS A record in
+  place, nginx vhost + rate-limit zone enabled, Let's Encrypt cert
+  (expires 2027-02-05, auto-renew), uvicorn bound to localhost
+  behind nginx (the raw `:8105` port is no longer public). OTP
+  *delivery* is configured: the app submits via local Exim with
+  SMTP AUTH using a dedicated mailbox (`sehatsathi@webnetism.in`),
+  and Exim relays out through the Brevo smarthost — the full
+  request → email → verify → session flow is proven end-to-end on
+  the deployed service (see `AUDIT.md`). The only operator input
+  left is the real supervisors' phone numbers
+  (`SEHATSATHI_SUPERVISOR_PHONES`, currently unset).
 
 ## Languages (23)
 
