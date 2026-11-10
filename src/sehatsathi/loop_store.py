@@ -33,10 +33,13 @@ def _patient_to_dict(p: Patient) -> dict:
         "abha_id": p.abha_id,
         "due_date": p.due_date.isoformat() if p.due_date else None,
         "due_label": p.due_label,
+        "due_source": p.due_source,
         "risk_factors": list(p.risk_factors),
         "danger_signs": list(p.danger_signs),
         "missed_doses": p.missed_doses,
         "months_pregnant": p.months_pregnant,
+        "days_since_delivery": p.days_since_delivery,
+        "treatment_month": p.treatment_month,
         "raw_note": p.raw_note,
     }
 
@@ -53,10 +56,13 @@ def _patient_from_dict(d: dict) -> Patient:
         due_date=(date.fromisoformat(d["due_date"])
                   if d.get("due_date") else None),
         due_label=d.get("due_label", ""),
+        due_source=d.get("due_source", ""),
         risk_factors=list(d.get("risk_factors", [])),
         danger_signs=list(d.get("danger_signs", [])),
         missed_doses=d.get("missed_doses", 0),
         months_pregnant=d.get("months_pregnant"),
+        days_since_delivery=d.get("days_since_delivery"),
+        treatment_month=d.get("treatment_month"),
         raw_note=d.get("raw_note", ""),
     )
 

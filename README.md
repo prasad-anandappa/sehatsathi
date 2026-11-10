@@ -36,7 +36,9 @@ An agent loop in one inspectable pass — **perceive → reason → act**:
 
 | Step | Tool | What it does |
 |---|---|---|
-| Perceive | `extract.py` | Rule-based parser for free-text / voice-transcript-style notes (English + common Hindi words, Hindi digits too). Finds category (pregnant / TB / child / postpartum / elderly), due dates ("due in 3 days", "overdue by 10 days", ISO dates), missed doses, risk factors, and **14 danger-sign patterns**. Danger-sign matching is **negation-aware** ("no bleeding" never escalates) and swelling only counts as taught in ASHA training (face/hands). An **ABHA id written in a note is recorded as written** — no ABDM lookup, no verification claimed. Never invents a patient who is not in the notes. |
+| Perceive | `extract.py` | Rule-based parser for free-text / voice-transcript-style notes (English + common Hindi words, Hindi digits, spoken numbers — "due in two days"). Finds category (pregnant / TB / child / postpartum / elderly), due dates ("due in 3 days", "overdue by 10 days", ISO dates), missed doses, risk factors, and **14 danger-sign patterns**. Danger-sign matching is **negation-aware** ("no bleeding" never escalates) and swelling only counts as taught in ASHA training (face/hands). An **ABHA id written in a note is recorded as written** — no ABDM lookup, no verification claimed. Never invents a patient who is not in the notes. The same patient written twice in a day is merged into one record. |
+| Schedule | `schedule.py` | When a note gives a stage but no date (child's age, pregnancy month, days since delivery, TB treatment month), the next standard programme checkpoint — UIP immunization, ANC windows, PNC home-visit days, TB sputum reviews — supplies the due date, labelled schedule-derived with a "confirm on the MCP card" instruction. |
+| Evidence | `benchmark.py` · `impact.py` | A 41-line hand-labelled corpus run through the real pipeline (danger recall 1.0 · false escalations 0 · category accuracy 1.0) plus live deployment aggregates — published at `/impact`, reproducible via `benchmarks/run_benchmark.py`. |
 | Reason | `risk.py` | Deterministic, **explainable** scoring: every point carries a written reason ("DANGER SIGN: severe headache…", "immunization overdue by 10 days"). Danger sign ⇒ `CRITICAL`, always first. |
 | Act — plan | `planner.py` | Tomorrow's route: danger first, then risk, villages grouped so the worker walks one sane route; 40-minute slots from 09:00 with a midday break. The route cap (12) is explicit: anyone beyond it is **named in the report as deferred**, never silently dropped. |
 | Act — remind | `messages.py` + `langs/` | Per-patient reminders in **23 languages** (all 22 Eighth-Schedule languages + English), simple words, native script, ready to copy into SMS/WhatsApp. Critical cases carry **112 + 108** in every language. Child/postpartum/elderly follow-ups also get a **family/caregiver note**. |
@@ -58,14 +60,22 @@ PYTHONPATH=src python3 -m sehatsathi.cli --notes data/sample_notes.txt --date 20
 
 # 2) Tests (needs pytest; API tests also need fastapi/httpx)
 pip install -e ".[dev,api]"
-pytest -q            # 79 tests
+pytest -q            # 117 tests
 
 # 3) API / deployed form
 uvicorn sehatsathi.api:app --port 8000     # after: pip install -e ".[api]"
 #    → GET /health · GET /demo · POST /plan {"notes": "...", "today": "2026-11-02"}
 #    → screening-to-care loop: POST /screening/intake · GET /loop ·
 #      POST /loop/refer · POST /loop/confirm · GET /loop/closure
+#    → GET /impact · GET /impact/ui — deployment counts + the
+#      reproducible benchmark, as JSON and as a page
 #    → interactive docs at http://localhost:8000/docs
+
+# 4) The reproducible benchmark (stdlib only)
+PYTHONPATH=src python3 benchmarks/run_benchmark.py
+#    → 41 hand-labelled lines: danger-sign recall 1.0, false
+#      escalations on negated lines 0, category accuracy 1.0;
+#      exits non-zero if a safety threshold ever fails
 ```
 
 Sample output (from `data/sample_notes.txt`, 10 patients): **3 same-day
@@ -74,7 +84,50 @@ swelling, a TB patient coughing blood, a postpartum mother whose baby is
 not feeding), a 10-visit timed route for the next day, and 10 reminders —
 each written in all 23 languages.
 
-## Production build (v1.4.0)
+## v1.5.0 — evidence + depth pass (2026-11-10)
+
+Built for the Code for a Billion filing, against its judging rubric
+(size · severity · solution quality · proven impact):
+
+- **Impact evidence endpoints** — `GET /impact` (JSON) and
+  `GET /impact/ui` (page): live deployment aggregates from the
+  production store (workers registered, cases tracked / open /
+  care-confirmed, mean days screening → care confirmed, per-village
+  counts — **counts only, never names or note contents**) next to the
+  reproducible benchmark below, computed at request time.
+- **Reproducible benchmark** — `benchmark.py` + `benchmarks/run_benchmark.py`:
+  41 hand-labelled synthetic lines (every danger sign, the same signs
+  negated, categories, spoken numbers, schedule fallbacks) run through
+  the real pipeline: **danger recall 1.0, false escalations 0,
+  category accuracy 1.0**. The script doubles as a release gate.
+- **Programme schedules** (`schedule.py`) — when a note gives a stage
+  but no date (child's age, pregnancy month, days since delivery, TB
+  treatment month), the next standard checkpoint (UIP immunization,
+  ANC windows, PNC home-visit days, TB sputum reviews) supplies the
+  due date, labelled `schedule`-derived with a "confirm on the MCP
+  card / register" instruction. Records arithmetic only.
+- **Spoken-number parsing** — "due in two days", "missed three
+  doses", "pregnant seven months" parse like their digit forms.
+- **Duplicate-line merging** — the same patient written twice in one
+  day's notes becomes one record (union of danger signs, earliest
+  due date), counted in the summary, never silent.
+- **Referral slips** — every escalation generates a hand-over slip
+  (EN/HI/KN) for the family / PHC desk, stating on its face that it
+  records what the worker noted and is **not a diagnosis**.
+- **Loop depth** — closure summaries now age every open case
+  (opened today / 2–3 days / 4+ days, days-open per case); intake
+  flags parsed-but-empty lines as *needs review* instead of silently
+  tracking a possibly misread register line.
+- **Field surfaces** — one-tap sample day (`/demo/ui`), a printable
+  day sheet (`/worker/print`, `/loop/ui/print`), the worker's own
+  register as CSV (`/worker/register.csv`), a supervisor **page**
+  (`/supervisor`, same counts-only rule), WhatsApp deep links on
+  reminder cards when the note carries a phone number, grouped
+  helplines (`/helplines`), script-aware result pages (Devanagari
+  notes return a Hindi page), and a page-weight test that enforces
+  the under-30 KB promise. **117 tests, all passing.**
+
+## Production build (v1.4.x)
 
 The screening-to-care loop shipped in v1.3.0 for the Future Health
 challenge as an **in-memory demo store**. v1.4.0 makes the deployed
@@ -163,10 +216,14 @@ the author's own account sign-in.
 
 This is a working, tested agent with synthetic sample data — **no field
 deployment with real patients is claimed**, and no real patient data is in
-this repo. The impact path is concrete: the agent removes the nightly
-register-sorting work (the report estimates worker-minutes saved per day),
-and — more importantly — makes the three highest-severity misses (danger
-signs, TB interruption, overdue immunization) structurally hard to miss.
+this repo. What is claimed is measured and reproducible: the live
+deployment's own aggregate counts and the labelled-corpus benchmark,
+both published at `/impact` (and `/impact/ui`) on the deployed service
+and reproducible from this repo (`benchmarks/run_benchmark.py`). The
+impact path is concrete: the agent removes the nightly register-sorting
+work (the report estimates worker-minutes saved per day), and — more
+importantly — makes the three highest-severity misses (danger signs, TB
+interruption, overdue immunization) structurally hard to miss.
 A pilot with one PHC cluster is the stated next step after the hackathon;
 the offline design means a pilot needs no infrastructure beyond a phone.
 
@@ -183,13 +240,17 @@ the offline design means a pilot needs no infrastructure beyond a phone.
 
 ```
 src/sehatsathi/  extract.py · risk.py · planner.py · messages.py
-                 helplines.py · ui.py · i18n.py · langs/ (23 languages)
+                 schedule.py (programme schedules) · benchmark.py
+                 impact.py (evidence payloads) · helplines.py · ui.py
+                 i18n.py · langs/ (23 languages)
                  llm.py (optional) · agent.py (orchestrator) · cli.py
                  api.py (FastAPI shell) · loop.py (loop logic) ·
                  loop_store.py (durable per-worker store) · db.py ·
                  auth.py · otp.py · config.py (production layer)
-tests/           79 pytest tests (extraction, risk, India features,
-                 languages, UI, API, loop, production layer)
+tests/           117 pytest tests (extraction, risk, India features,
+                 languages, UI, API, loop, production layer, as-user
+                 audit, v1.5.0 evidence + depth pass)
+benchmarks/      run_benchmark.py — the reproducible safety gate
 data/            sample_notes.txt — one synthetic day of ASHA notes
 ```
 

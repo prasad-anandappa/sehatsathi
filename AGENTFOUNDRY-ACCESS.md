@@ -107,7 +107,8 @@ Evidence says **yes, by design** (confidence: high, with one caveat):
    `git clone https://github.com/prasad-anandappa/sehatsathi.git`
 4. In the IDE terminal, verify the exact judge flow:
    `PYTHONPATH=src python3 -m sehatsathi.cli --notes data/sample_notes.txt --date 2026-11-02`
-   and `pip install -e ".[dev,api]" && pytest -q` (expect 18 passed).
+   and `pip install -e ".[dev,api]" && pytest -q` (expect 89 passed —
+   count refreshed 2026-11-07 against v1.4.1).
 5. Ask the IDE's assistant to run the API (`uvicorn sehatsathi.api:app
    --port 8000`) and open `/demo` in its browser panel — screenshot this
    for the demo/submission (evidence of building in AgentFoundry).

@@ -32,6 +32,10 @@ def score_patient(p: Patient, today: date) -> FollowUp:
         elif delta <= 7:
             score += 12
             reasons.append(f"{p.due_label} due in {delta} day(s)")
+        if p.due_source == "schedule":
+            reasons.append("date from the standard programme schedule "
+                           "— confirm on the MCP card / register at "
+                           "the visit")
     if p.category == Category.PREGNANT:
         if p.months_pregnant and p.months_pregnant >= 8:
             score += 15

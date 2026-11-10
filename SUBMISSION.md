@@ -27,5 +27,43 @@ explainable, deterministic rules — because the villages it serves have the
 least connectivity and the most at stake.
 
 **Proven-impact honesty line (keep in the submission):** tested working
-agent, 49 automated tests, synthetic sample data; no real-patient field
+agent, 117 automated tests, synthetic sample data; no real-patient field
 deployment is claimed yet — a one-PHC pilot is the next step.
+
+---
+
+## Filing asset checklist (refresh/verify pass — 2026-11-07)
+
+Verified against the live product on 2026-11-07: `GET
+https://sehatsathi.nammaprojects.com/health` → `version 1.5.0,
+storage durable, auth_mode otp`; local suite re-run → **117 passed**
+(clean venv, `pip install -e ".[dev,api]"`). Repo above is this
+checkout's `origin`. Everything agent-side below is filing-ready;
+the only remaining step is the founder's own AgentFoundry sign-up +
+project creation (see `AGENTFOUNDRY-ACCESS.md` §"The blocker").
+
+Assets the filing needs, and their state:
+
+- [x] This pack — every field paste-ready, facts refreshed to
+      v1.5.0 / 117 tests (2026-11-10).
+- [x] Public GitHub repo, README with run instructions, MIT licence.
+- [x] Live demo link — https://sehatsathi.nammaprojects.com
+      (`/demo` for the JSON plan, `/loop/ui` for the loop demo).
+- [ ] **Demo video (2–3 min)** — a SehatSathi pitch video already
+      exists (YouTube link carried in the Future Health pack; local
+      MIT Solve pitch video in the workspace), but it is a pitch asset,
+      not the CFB `DEMO-SCRIPT.md` product walkthrough; if the filing
+      uses a video rather than the live link, record/refresh per
+      `DEMO-SCRIPT.md` (script refreshed to 117 tests 2026-11-10).
+- [ ] **Screenshots for the submission gallery** — no product-UI
+      captures for this filing exist yet (branding/pitch images under
+      `~/workspace/imagine_media/` are not UI captures); capture at
+      filing time: (1) live home page
+      (sehatsathi.nammaprojects.com), (2) `/loop/ui` demo with the
+      sample camp list loaded, (3) a worker `/worker` page after
+      OTP sign-in, (4) one localised reminder page (e.g. Kannada),
+      (5) `pytest -q` output showing 117 passed.
+- [ ] **AgentFoundry IDE screenshot** — evidence of the project open
+      in the official IDE; can only be captured inside the
+      founder's signed-in AgentFoundry session (see
+      `IMPROVEMENT-PACK-1.md`).

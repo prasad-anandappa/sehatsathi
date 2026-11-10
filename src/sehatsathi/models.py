@@ -40,10 +40,18 @@ class Patient:
                                            # (no ABDM integration)
     due_date: date | None = None           # next checkup / dose / vaccine
     due_label: str = ""                    # human label, e.g. "ANC checkup"
+    due_source: str = ""                   # "notes" | "schedule" — a
+                                           # schedule-derived date comes
+                                           # from the standard programme
+                                           # schedule (schedule.py) and
+                                           # must be confirmed on the
+                                           # MCP card / register
     risk_factors: list[str] = field(default_factory=list)
     danger_signs: list[str] = field(default_factory=list)
     missed_doses: int = 0                  # TB / medication adherence
     months_pregnant: int | None = None
+    days_since_delivery: int | None = None  # postpartum notes
+    treatment_month: int | None = None      # TB regimen month, if written
     raw_note: str = ""
 
 
@@ -61,6 +69,10 @@ class FollowUp:
     # where a family member is usually the one who must act
     # (child / postpartum / elderly); empty dict otherwise.
     caregiver_notes: dict = field(default_factory=dict)
+    # Referral slip for CRITICAL follow-ups only: {lang_code: text} in
+    # en/hi/kn — a records hand-over note for the family / PHC desk.
+    # It records what the worker noted; it is not a diagnosis.
+    referral_slips: dict = field(default_factory=dict)
 
     @property
     def reminder_en(self) -> str:
@@ -117,6 +129,8 @@ class Report:
                 "reminders": f.reminders,
                 "caregiver_note": f.caregiver_note or None,
                 "caregiver_notes": f.caregiver_notes or None,
+                "referral_slips": f.referral_slips or None,
+                "due_source": f.patient.due_source or None,
                 "abha_id_from_notes": f.patient.abha_id or None,
             }
         return {

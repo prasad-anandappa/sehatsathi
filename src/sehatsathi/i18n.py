@@ -101,6 +101,37 @@ def language_options() -> list[tuple[str, str, str]]:
     return opts
 
 
+# Unicode block → display language, for script detection (v1.5.0).
+# Devanagari serves several shipped languages; Hindi is the display
+# default for it. Detection only ever picks the DISPLAY language of a
+# result page — extraction already handles the words themselves.
+_SCRIPT_BLOCKS = [
+    (0x0900, 0x097F, "hi"), (0x0980, 0x09FF, "bn"),
+    (0x0A00, 0x0A7F, "pa"), (0x0A80, 0x0AFF, "gu"),
+    (0x0B00, 0x0B7F, "or"), (0x0B80, 0x0BFF, "ta"),
+    (0x0C00, 0x0C7F, "te"), (0x0C80, 0x0CFF, "kn"),
+    (0x0D00, 0x0D7F, "ml"), (0x0600, 0x06FF, "ur"),
+]
+
+
+def detect_display_lang(text: str | None) -> str | None:
+    """Best display language for `text` by its dominant native script,
+    or None when the text is (mostly) Latin-script. Needs at least 4
+    characters in one script block to commit — a stray word in a name
+    must not flip a whole page."""
+    counts: dict[str, int] = {}
+    for ch in text or "":
+        cp = ord(ch)
+        for lo, hi, code in _SCRIPT_BLOCKS:
+            if lo <= cp <= hi:
+                counts[code] = counts.get(code, 0) + 1
+                break
+    if not counts:
+        return None
+    code, n = max(counts.items(), key=lambda kv: kv[1])
+    return code if n >= 4 and code in LANGUAGES else None
+
+
 def verification_status(code: str | None) -> str:
     """'verified' | 'provisional' for a language code (English default).
 

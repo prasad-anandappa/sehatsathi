@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 
+from . import schedule
 from .models import Category, Patient
 
 # Danger signs — aligned with common maternal / TB / child red flags
@@ -50,6 +51,23 @@ DANGER_SIGNS: dict[str, list[str]] = {
 }
 
 _HINDI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+# Spoken-form numbers (v1.5.0): notes are often dictated or written
+# the way they are said — "due in two days", "missed three doses",
+# "pregnant seven months". One small word set, applied only where a
+# count is expected, so ordinary prose is never misread as a number.
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30,
+}
+_NUM = r"(\d+|" + "|".join(_NUMBER_WORDS) + r")"
+
+
+def _to_int(token: str) -> int:
+    return int(token) if token.isdigit() else _NUMBER_WORDS[token]
 
 # Negation handling (audit 2026-11-03, H1): workers routinely document
 # ABSENT signs — "no bleeding", "khoon nahi hai". A variant match whose
@@ -116,16 +134,16 @@ def _parse_due(low: str, today: date) -> date | None:
             return date.fromisoformat(m.group(1))
         except ValueError:
             return None
-    m = re.search(r"due in (\d+) days?", low)
+    m = re.search(r"due in " + _NUM + r" days?", low)
     if m:
-        return today + timedelta(days=int(m.group(1)))
+        return today + timedelta(days=_to_int(m.group(1)))
     if "due tomorrow" in low:
         return today + timedelta(days=1)
     if "due today" in low or "due now" in low:
         return today
-    m = re.search(r"overdue (?:by )?(\d+) days?", low)
+    m = re.search(r"overdue (?:by )?" + _NUM + r" days?", low)
     if m:
-        return today - timedelta(days=int(m.group(1)))
+        return today - timedelta(days=_to_int(m.group(1)))
     if "overdue" in low:
         return today - timedelta(days=1)
     return None
@@ -159,11 +177,11 @@ def parse_line(line: str, today: date) -> Patient | None:
 
     category = Category.GENERAL
     months_pregnant = None
-    m = re.search(r"pregnan\w*(?:\s+of)?\s*(\d+)\s*month", low)
+    m = re.search(r"pregnan\w*(?:\s+of)?\s*" + _NUM + r"\s*month", low)
     if "pregnan" in low or "garbh" in low:
         category = Category.PREGNANT
         if m:
-            months_pregnant = int(m.group(1))
+            months_pregnant = _to_int(m.group(1))
     elif re.search(r"\btb\b", low) or "tuberculosis" in low or "dots" in low:
         category = Category.TB
     elif "postpartum" in low or "delivered" in low or "after delivery" in low:
@@ -175,18 +193,34 @@ def parse_line(line: str, today: date) -> Patient | None:
     m = re.search(r"(\d+(?:\.\d+)?)\s*(?:years?|yrs?|saal)\b", low)
     if m:
         age_years = float(m.group(1))
-    m = re.search(r"child\s+(\d+)\s*months?", low) or re.search(r"(\d+)\s*months?\s*old", low)
+    m = re.search(r"child\s+" + _NUM + r"\s*months?", low) or \
+        re.search(_NUM + r"\s*months?\s*old", low)
     if m:
-        age_months = int(m.group(1))
+        age_months = _to_int(m.group(1))
         if category == Category.GENERAL:
             category = Category.CHILD
     if age_years is not None and age_years >= 60 and category == Category.GENERAL:
         category = Category.ELDERLY
 
     missed = 0
-    m = re.search(r"missed\s+(\d+)\s+dose", low)
+    m = re.search(r"missed\s+" + _NUM + r"\s+dose", low)
     if m:
-        missed = int(m.group(1))
+        missed = _to_int(m.group(1))
+
+    # Postpartum stage: "delivered 10 days ago" / "10 days after
+    # delivery" — drives the PNC schedule fallback below.
+    days_since_delivery = None
+    m = re.search(r"delivered\s+" + _NUM + r"\s+days?\s+ago", low) or \
+        re.search(_NUM + r"\s+days?\s+after delivery", low)
+    if m:
+        days_since_delivery = _to_int(m.group(1))
+
+    # TB regimen stage: "treatment month 3" / "month 3 of treatment".
+    treatment_month = None
+    m = re.search(r"treatment\s+month\s+" + _NUM, low) or \
+        re.search(r"month\s+" + _NUM + r"\s+of\s+treatment", low)
+    if m:
+        treatment_month = _to_int(m.group(1))
 
     risks = []
     for key, label in (("high bp", "high BP"), ("hypertension", "hypertension"),
@@ -222,16 +256,41 @@ def parse_line(line: str, today: date) -> Patient | None:
             and not _is_negated(low, swell_idx, swell_idx + 7):
         risks.append("swelling noted — watch for face/hands swelling")
 
+    due_date = _parse_due(low, today)
+    due_label = _due_label(low, category)
+    due_source = "notes" if due_date is not None else ""
+    if due_date is None:
+        # No date in the note — fall back to the standard programme
+        # schedule for the person's stage (schedule.py). The date is
+        # labelled as schedule-derived everywhere it surfaces, with
+        # an instruction to confirm it on the MCP card / register.
+        sched = None
+        if category == Category.CHILD and age_months is not None:
+            sched = schedule.next_immunization(age_months, today)
+        elif category == Category.PREGNANT and months_pregnant:
+            sched = schedule.next_anc_visit(months_pregnant, today)
+        elif category == Category.POSTPARTUM \
+                and days_since_delivery is not None:
+            sched = schedule.next_pnc_visit(days_since_delivery, today)
+        elif category == Category.TB and treatment_month:
+            sched = schedule.next_tb_checkpoint(treatment_month, today)
+        if sched is not None:
+            due_date, due_label = sched
+            due_source = "schedule"
+
     phone_m = re.search(r"\b[6-9]\d{9}\b", line)
     return Patient(
         name=name, category=category, village=village,
         age_years=age_years, age_months=age_months,
         phone=phone_m.group(0) if phone_m else "",
         abha_id=_find_abha(line, low),
-        due_date=_parse_due(low, today),
-        due_label=_due_label(low, category),
+        due_date=due_date,
+        due_label=due_label,
+        due_source=due_source,
         risk_factors=risks, danger_signs=danger_signs,
         missed_doses=missed, months_pregnant=months_pregnant,
+        days_since_delivery=days_since_delivery,
+        treatment_month=treatment_month,
         raw_note=line,
     )
 

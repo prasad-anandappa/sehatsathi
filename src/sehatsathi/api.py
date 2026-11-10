@@ -1,4 +1,4 @@
-"""FastAPI service — SehatSathi production API (v1.4.1).
+"""FastAPI service — SehatSathi production API (v1.5.0).
 
 Run:  uvicorn sehatsathi.api:app --host 0.0.0.0 --port 8105
 Docs: http://localhost:8105/docs
@@ -29,6 +29,8 @@ X-Worker-Phone / X-Worker-Id headers and defaults to a shared
 """
 from __future__ import annotations
 
+import csv
+import io
 import secrets
 import threading
 import time
@@ -38,7 +40,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -48,6 +50,8 @@ from .auth import AuthService, WorkerContext, make_current_worker
 from .config import Settings
 from .db import Store, make_session_factory
 from .helplines import HELPLINES
+from .i18n import detect_display_lang
+from .impact import build_impact, deployment_stats
 from .loop import ScreeningLoop
 from .loop_store import DurableScreeningLoop
 from .otp import OtpSenderChain
@@ -173,7 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     current_worker = make_current_worker(settings, auth)
 
     app = FastAPI(
-        title="SehatSathi", version="1.4.1",
+        title="SehatSathi", version="1.5.0",
         description="AI follow-up agent for India's frontline health "
                     "workers (ASHA/ANM).")
     app.add_middleware(GZipMiddleware, minimum_size=512)
@@ -233,7 +237,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "service": "sehatsathi",
-                "offline_core": True, "version": "1.4.1",
+                "offline_core": True, "version": "1.5.0",
                 "storage": "durable", "auth_mode": settings.auth_mode}
 
     @app.get("/demo")
@@ -250,9 +254,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/helplines")
     def helplines() -> dict:
+        groups = {
+            "emergency": ["112", "108"],
+            "transport": ["102"],
+            "health_information": ["104"],
+            "schemes": ["14555"],
+            "tb": ["1800-11-6666"],
+            "protection": ["1098", "181"],
+            "mental_health": ["14416"],
+            "elderly": ["14567"],
+        }
+        by_number = {h["number"]: h for h in HELPLINES}
         return {"helplines": HELPLINES,
+                "groups": {name: [by_number[n] for n in numbers]
+                           for name, numbers in groups.items()},
                 "note": "National numbers. 102 and 104 run in many states — "
                         "confirm the local equivalent at the PHC."}
+
+    # ---- impact evidence (v1.5.0) ------------------------------------
+    # Proven impact is 25% of the Code for a Billion score and its
+    # first tie-breaker. These two surfaces publish the evidence:
+    # live deployment aggregates (counts only) + the reproducible
+    # labelled-corpus benchmark, computed at request time.
+
+    def _impact_payload() -> dict:
+        notes = _SAMPLE.read_text(encoding="utf-8") if _SAMPLE.exists() else ""
+        return build_impact(store, notes)
+
+    @app.get("/impact")
+    def impact() -> dict:
+        return _impact_payload()
+
+    @app.get("/impact/ui", response_class=HTMLResponse)
+    def impact_ui() -> str:
+        return ui.impact_page(_impact_payload())
+
+    @app.get("/demo/ui", response_class=HTMLResponse)
+    def demo_ui(lang: str = "en") -> str:
+        """The sample day as a page — one tap, no typing (v1.5.0).
+        Synthetic data only, same agent run as /demo."""
+        notes = _SAMPLE.read_text(encoding="utf-8") if _SAMPLE.exists() else ""
+        report = agent.run(notes, today=date(2026, 11, 2))
+        return ui.result_page(report, lang)
+
+    @app.get("/deployment")
+    def deployment() -> dict:
+        """Deployment aggregates only (the deployment half of /impact)."""
+        return deployment_stats(store)
 
     @app.get("/", response_class=HTMLResponse)
     def index(lang: str = "en") -> str:
@@ -269,6 +317,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         notes = fields.get("notes", [""])[0]
         today = fields.get("today", [""])[0]
         lang = fields.get("lang", ["en"])[0]
+        if lang == "en":
+            # Script-aware display (v1.5.0): notes dictated or typed
+            # in a native script get their result page in that
+            # language without the worker hunting through the picker.
+            # An explicit non-English choice is never overridden.
+            detected = detect_display_lang(notes)
+            if detected:
+                lang = detected
         try:
             _check_size(notes)
             report = agent.run(notes, today=_parse_today(today))
@@ -324,7 +380,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 + (f", {len(result['duplicates_skipped'])} already tracked "
                    "(kept as-is)" if result["duplicates_skipped"] else "")
                 + (f", {len(result['unparsed_lines'])} line(s) could not "
-                   "be read" if result["unparsed_lines"] else "") + ".")
+                   "be read" if result["unparsed_lines"] else "")
+                + (f", {len(result.get('needs_review', []))} line(s) had "
+                   "nothing to act on — please re-check them in the "
+                   "register" if result.get("needs_review") else "") + ".")
 
     @app.get("/login", response_class=HTMLResponse)
     def login_form() -> str:
@@ -463,6 +522,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return ui.result_page(report, lang,
                               back_href="/worker?lang=" + lang)
 
+    @app.get("/worker/register.csv")
+    def worker_register_csv(request: Request):
+        """The worker's own loop register as CSV (v1.5.0) — her
+        backup / the sheet she can hand to the PHC. Only her own
+        records, only register fields (no note text exists in loop
+        records beyond the parsed register line)."""
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        loop_obj = worker_loop(worker.id)
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["name", "village", "category", "state",
+                         "priority", "due_label", "due_date",
+                         "screened_on", "referred_on", "care_confirmed_on"])
+        for rec in loop_obj.records():
+            p = rec.patient
+            writer.writerow([
+                p.name, p.village, p.category.value, rec.state.label,
+                rec.followup.priority.value, p.due_label,
+                p.due_date.isoformat() if p.due_date else "",
+                rec.screened_on.isoformat(),
+                rec.referred_on.isoformat() if rec.referred_on else "",
+                rec.care_confirmed_on.isoformat()
+                if rec.care_confirmed_on else ""])
+        return PlainTextResponse(
+            buf.getvalue(), media_type="text/csv",
+            headers={"Content-Disposition":
+                     'attachment; filename="sehatsathi-register.csv"'})
+
+    @app.get("/worker/print", response_class=HTMLResponse)
+    def worker_print(request: Request):
+        worker = _ui_worker(request)
+        if worker is None:
+            return RedirectResponse("/login", status_code=303)
+        return ui.print_sheet(worker_loop(worker.id), date.today(),
+                              heading="SehatSathi — my day sheet")
+
     # ---- the notes flow (per-worker history) ---------------------------
 
     @app.post("/plan")
@@ -544,22 +641,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # ---- supervisor (read-only, aggregates only) -------------------------
 
-    @app.get("/supervisor/summary")
-    def supervisor_summary(today: str | None = None,
-                           worker: WorkerContext = Depends(current_worker)
-                           ) -> dict:
-        """Aggregate counts + per-worker closure summaries across all
-        workers. Visit-note CONTENTS are never included — counts of
-        stored note-days only."""
-        if worker.role != "supervisor":
-            raise HTTPException(
-                status_code=403,
-                detail="supervisor role required for the aggregate view")
-        day = _parse_today(today)
+    def _supervisor_data(day: date) -> dict:
         totals = {"tracked": 0, "open": 0,
                   "by_state": {"screened": 0, "referred": 0,
                                "care confirmed": 0}}
         per_worker = []
+        close_days: list[int] = []
+        villages: dict[str, dict[str, int]] = {}
         for worker_id in store.loop_worker_ids():
             loop_obj = DurableScreeningLoop(store, worker_id)
             counts = loop_obj.counts()
@@ -572,14 +660,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "counts": counts,
                 "closure": loop_obj.closure_summary(day),
             })
+            for rec in loop_obj.records():
+                bucket = villages.setdefault(
+                    rec.patient.village or "(unspecified)",
+                    {"tracked": 0, "open": 0, "closed": 0})
+                bucket["tracked"] += 1
+                if rec.is_open:
+                    bucket["open"] += 1
+                else:
+                    bucket["closed"] += 1
+                    if rec.care_confirmed_on and rec.screened_on:
+                        close_days.append(
+                            (rec.care_confirmed_on - rec.screened_on).days)
+        totals["mean_days_screened_to_care_confirmed"] = (
+            round(sum(close_days) / len(close_days), 1)
+            if close_days else None)
         return {
             "date": day.isoformat(),
             "totals": totals,
             "workers": per_worker,
+            "by_village": villages,
             "visit_note_days_stored": store.visit_note_count(),
             "note": "Aggregate view only — visit-note contents are "
                     "never shown to supervisors.",
         }
+
+    @app.get("/supervisor/summary")
+    def supervisor_summary(today: str | None = None,
+                           worker: WorkerContext = Depends(current_worker)
+                           ) -> dict:
+        """Aggregate counts + per-worker closure summaries across all
+        workers. Visit-note CONTENTS are never included — counts of
+        stored note-days only."""
+        if worker.role != "supervisor":
+            raise HTTPException(
+                status_code=403,
+                detail="supervisor role required for the aggregate view")
+        return _supervisor_data(_parse_today(today))
+
+    @app.get("/supervisor", response_class=HTMLResponse)
+    def supervisor_page(request: Request, today: str | None = None):
+        """The supervisor aggregates as a phone-browser page (v1.5.0)
+        — ANMs are phone users too; the JSON endpoint alone left the
+        aggregate view unusable in the field. Same identity rules:
+        cookie session in OTP mode, header identity in stub mode;
+        same content rule: counts only, never note contents."""
+        if settings.auth_mode == "otp":
+            worker = _ui_worker(request)
+        else:
+            worker = current_worker(request)
+        if worker is None or worker.role != "supervisor":
+            raise HTTPException(
+                status_code=403,
+                detail="supervisor role required for the aggregate view")
+        return ui.supervisor_page(_supervisor_data(_parse_today(today)))
 
     # ---- loop demo + UI (synthetic data only) -----------------------------
 
@@ -609,6 +743,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.cookies.get("ss_demo"))
         return _demo_response(
             ui.loop_page(loop_obj, date.today(), demo=True, lang=lang),
+            token, is_new)
+
+    @app.get("/loop/ui/print", response_class=HTMLResponse)
+    def loop_ui_print(request: Request):
+        token, loop_obj, is_new = demo_loops.get(
+            request.cookies.get("ss_demo"))
+        return _demo_response(
+            ui.print_sheet(loop_obj, date.today(),
+                           heading="SehatSathi — demo day sheet"),
             token, is_new)
 
     @app.post("/loop/ui/intake")

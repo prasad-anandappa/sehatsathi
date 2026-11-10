@@ -132,7 +132,7 @@ class ScreeningLoop:
         overwritten — the existing record and its state survive; the
         duplicate is counted and reported, never silently merged.
         """
-        added, duplicates, unparsed = [], [], []
+        added, duplicates, unparsed, needs_review = [], [], [], []
         for raw in list_text.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -165,8 +165,19 @@ class ScreeningLoop:
                                     "note": "care already confirmed at intake"})
             self._records[rec.key] = rec
             added.append(patient.name)
+            # Data-quality flag (v1.5.0): a line that parsed but
+            # carries nothing actionable — no category cue, no due
+            # date, no risk factor, no danger sign — may be a
+            # misread register line. Name it so the worker re-checks
+            # the line instead of trusting a possibly-wrong record.
+            if patient.category.value == "general" \
+                    and patient.due_date is None \
+                    and not patient.risk_factors \
+                    and not patient.danger_signs:
+                needs_review.append(patient.name)
         return {"added": added, "duplicates_skipped": duplicates,
                 "unparsed_lines": unparsed,
+                "needs_review": needs_review,
                 "total_tracked": len(self._records)}
 
     # ---- transitions -------------------------------------------------
@@ -281,11 +292,24 @@ class ScreeningLoop:
                 "due_label": rec.patient.due_label,
                 "danger_signs": rec.patient.danger_signs,
                 "reasons": fu.reasons,
+                # Aging (v1.5.0): how long this loop has been open —
+                # a record open 4+ days is a stuck loop a supervisor
+                # should pick up, and the summary must say so.
+                "days_open": max((day - rec.screened_on).days, 0),
             })
         still_open.sort(key=lambda d: -d["score"])
+        aging = {"opened_today": 0, "open_2_3_days": 0, "open_4_plus_days": 0}
+        for d in still_open:
+            if d["days_open"] <= 1:
+                aging["opened_today"] += 1
+            elif d["days_open"] <= 3:
+                aging["open_2_3_days"] += 1
+            else:
+                aging["open_4_plus_days"] += 1
         return {
             "date": day.isoformat(),
             "counts": self.counts(),
+            "aging": aging,
             "screened_today": sum(1 for r in self._records.values()
                                   if r.screened_on == day),
             "referred_today": sum(1 for r in self._records.values()
@@ -321,11 +345,12 @@ class ScreeningLoop:
             lines.append("")
         if s["still_open"]:
             lines += ["## ⏳ Still open — carries to tomorrow, named here so nobody is dropped",
-                      "", "| # | Patient | Village | State | Priority | Why |",
-                      "|---|---------|---------|-------|----------|-----|"]
+                      "", "| # | Patient | Village | State | Priority | Open | Why |",
+                      "|---|---------|---------|-------|----------|------|-----|"]
             for i, d in enumerate(s["still_open"], 1):
                 lines.append(f"| {i} | {d['name']} | {d['village']} | {d['state']} | "
-                             f"{d['priority']} | {'; '.join(d['reasons'])} |")
+                             f"{d['priority']} | {d['days_open']}d | "
+                             f"{'; '.join(d['reasons'])} |")
             lines.append("")
         else:
             lines += ["## ✅ Loop fully closed",

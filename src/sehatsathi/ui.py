@@ -18,10 +18,25 @@ text is HTML-escaped before rendering.
 from __future__ import annotations
 
 import html
+from urllib.parse import quote
 
 from .helplines import HELPLINES
 from .i18n import LANGUAGES, get_strings, language_options, verification_status
 from .models import Report
+
+
+def _wa_link(phone: str, text: str) -> str:
+    """A wa.me deep link with the reminder pre-filled (v1.5.0).
+
+    The phone number exists only because the worker wrote it in the
+    note; the link is a plain anchor — nothing is sent, tracked or
+    stored by SehatSathi. The worker taps, checks, and sends from
+    her own WhatsApp, exactly as she already does.
+    """
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) == 10:
+        digits = "91" + digits
+    return ("https://wa.me/" + digits + "?text=" + quote(text))
 
 _RTL = {"ur", "ks", "sd"}
 
@@ -133,6 +148,11 @@ def index_page(lang: str = "en", message: str = "") -> str:
                 "the screening-to-care loop demo: intake a camp list, "
                 "record referrals, confirm care, and get a day-end "
                 "closure summary that names everyone still open →</a></p>")
+        out += ('<p><a href="/demo/ui"><b>See the sample day →</b></a> '
+                "the bundled synthetic day, planned in one tap — "
+                "no typing. &nbsp;·&nbsp; "
+                '<a href="/impact/ui"><b>Impact &amp; evidence →</b></a> '
+                "deployment counts and the reproducible benchmark.</p>")
     else:
         out += ('<p><a href="/loop/ui"><b>Screening camp mode →</b></a></p>')
     return out + _helpline_footer(lang)
@@ -151,11 +171,17 @@ def result_page(report: Report, lang: str = "en",
     if report.escalations:
         out.append("<h2>🚨 " + _esc(ui["escalate"]) + "</h2>")
         for f in report.escalations:
-            out.append(
+            card = (
                 "<div class='card crit'><b>" + _esc(f.patient.name) + "</b> "
                 "(" + _esc(f.patient.village) + ") — "
                 + _esc(", ".join(f.patient.danger_signs)) + "<br>"
-                + _esc(f.action) + "</div>")
+                + _esc(f.action))
+            slip = f.referral_slips.get(lang) or f.referral_slips.get("en")
+            if slip:
+                card += ("<br><span class='small'>🧾 Referral slip — "
+                         "hand to the family / PHC desk:</span><br>"
+                         + _esc(slip).replace("\n", "<br>"))
+            out.append(card + "</div>")
     out.append("<h2>" + _esc(ui["route"]) + "</h2>")
     for slot in report.plan:
         f = slot.followup
@@ -173,6 +199,9 @@ def result_page(report: Report, lang: str = "en",
         note = f.caregiver_notes.get(lang) if f.caregiver_notes else None
         if note:
             card += "<br>👨‍👩‍👧 " + _esc(note)
+        if f.patient.phone:
+            card += ('<br><a href="' + _esc(_wa_link(f.patient.phone, primary))
+                     + '">📲 Send this reminder on WhatsApp</a>')
         out.append(card + "</div>")
     if s.get("visits_deferred"):
         out.append("<h2>⏭️ " + _esc(ui["deferred_title"]) + "</h2>"
@@ -263,6 +292,12 @@ def loop_page(loop_obj, today, message: str = "", demo: bool = False,
                    + " · Referred: " + _esc(counts["referred"])
                    + " · Care confirmed: " + _esc(counts["care confirmed"])
                    + "</h2>")
+        links = ('<p><a href="' + _esc(base) + '/print">🖨 Printable '
+                 "day sheet</a>")
+        if base == "/worker":
+            links += (' &nbsp;·&nbsp; <a href="/worker/register.csv">'
+                      "⬇ Download my register (CSV)</a>")
+        out.append(links + "</p>")
         for rec in records:
             f = rec.followup
             cls = {"CRITICAL": "crit", "HIGH": "high",
@@ -314,18 +349,179 @@ def loop_page(loop_obj, today, message: str = "", demo: bool = False,
                    + "</b> · Referred today: <b>" + _esc(s["referred_today"])
                    + "</b> · Care confirmed today: <b>"
                    + _esc(s["care_confirmed_today"]) + "</b></p>")
+        aging = s.get("aging") or {}
+        out.append("<p>Open since today: <b>" + _esc(aging.get("opened_today", 0))
+                   + "</b> · open 2–3 days: <b>" + _esc(aging.get("open_2_3_days", 0))
+                   + "</b> · open 4+ days: <b>" + _esc(aging.get("open_4_plus_days", 0))
+                   + "</b> — a case open 4+ days needs the ANM's eye.</p>")
         if s["still_open"]:
             out.append("<p><b>Still open — carries to tomorrow:</b></p><ul>")
             for d in s["still_open"]:
                 out.append("<li><b>" + _esc(d["name"]) + "</b> ("
                            + _esc(d["village"]) + ") — " + _esc(d["state"])
                            + " · " + _esc(d["priority"]) + " · "
-                           + _esc(d["due_label"]) + "</li>")
+                           + _esc(d["due_label"]) + " · open "
+                           + _esc(d.get("days_open", 0)) + " day(s)</li>")
             out.append("</ul>")
         else:
             out.append("<p>✅ <b>Loop fully closed</b> — every screened "
                        "person has confirmed care.</p>")
     out.append(_helpline_footer(lang))
+    return "\n".join(out)
+
+
+# ---- Printable day sheet (v1.5.0) ----
+# The paper register is still the legal record in most PHCs. This
+# page is the day's loop state laid out for a cheap printer or a
+# screenshot into the register book: no forms, no buttons, nothing
+# that wastes ink or paper.
+
+_PRINT_CSS = ("body{font-family:system-ui,sans-serif;margin:16px;color:#000}"
+              "table{border-collapse:collapse;width:100%}"
+              "td,th{border:1px solid #666;padding:4px 6px;text-align:left}"
+              "@media print{button{display:none}}")
+
+
+def print_sheet(loop_obj, today, heading: str = "SehatSathi — day sheet") -> str:
+    s = loop_obj.closure_summary(today)
+    c = s["counts"]["by_state"]
+    out = ['<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+           "<title>" + _esc(heading) + "</title><style>" + _PRINT_CSS
+           + "</style></head><body>",
+           "<h1>" + _esc(heading) + " — " + _esc(s["date"]) + "</h1>",
+           "<p>Tracked: <b>" + _esc(s["counts"]["tracked"]) + "</b> · "
+           "Screened: " + _esc(c["screened"]) + " · Referred: "
+           + _esc(c["referred"]) + " · Care confirmed: "
+           + _esc(c["care confirmed"]) + "</p>",
+           "<p>Today: " + _esc(s["screened_today"]) + " screened · "
+           + _esc(s["referred_today"]) + " referred · "
+           + _esc(s["care_confirmed_today"]) + " care confirmed</p>"]
+    if s["open_escalations"]:
+        out.append("<h2>🚨 Still open WITH danger signs — hand to the "
+                   "ANM/PHC tonight</h2><ul>")
+        for d in s["still_open"]:
+            if d["priority"] == "CRITICAL":
+                out.append("<li><b>" + _esc(d["name"]) + "</b> ("
+                           + _esc(d["village"]) + ") — "
+                           + _esc(", ".join(d["danger_signs"])) + "</li>")
+        out.append("</ul>")
+    if s["still_open"]:
+        out.append("<h2>Still open — carries to tomorrow</h2>"
+                   "<table><tr><th>#</th><th>Patient</th><th>Village</th>"
+                   "<th>State</th><th>Priority</th><th>Open</th></tr>")
+        for i, d in enumerate(s["still_open"], 1):
+            out.append("<tr><td>" + str(i) + "</td><td>" + _esc(d["name"])
+                       + "</td><td>" + _esc(d["village"]) + "</td><td>"
+                       + _esc(d["state"]) + "</td><td>" + _esc(d["priority"])
+                       + "</td><td>" + _esc(d.get("days_open", 0))
+                       + " day(s)</td></tr>")
+        out.append("</table>")
+    else:
+        out.append("<p>✅ <b>Loop fully closed</b> — every screened "
+                   "person has confirmed care.</p>")
+    out.append("<p>SehatSathi tracks and reminds only — it gives no "
+               "diagnosis and no treatment advice. Emergency 112 · "
+               "Ambulance 108.</p></body></html>")
+    return "\n".join(out)
+
+
+# ---- Impact & evidence page (v1.5.0) ----
+
+def impact_page(impact: dict) -> str:
+    dep = impact["deployment"]
+    bench = impact["reproducible_benchmark"]
+    day = bench.get("sample_day") or {}
+    recall = bench.get("danger_recall")
+    recall_txt = ("—" if recall is None
+                  else f"{recall * 100:.0f}%")
+    acc = bench.get("category_accuracy")
+    acc_txt = "—" if acc is None else f"{acc * 100:.0f}%"
+    out = [_head("en"),
+           '<p><a href="/">← Follow-up planner</a></p>',
+           "<h2>Impact &amp; evidence</h2>",
+           "<p>Two kinds of proof, kept separate on purpose: what the "
+           "live deployment has actually done (counts only — never "
+           "names, never note contents), and a benchmark any judge "
+           "can reproduce from the repo in under a minute.</p>",
+           "<h2>Live deployment — counts only</h2>",
+           "<div class='card'>Health workers registered: <b>"
+           + _esc(dep["workers_registered"]) + "</b><br>"
+           "Screening cases tracked: <b>" + _esc(dep["loop_records_tracked"])
+           + "</b> · still open: <b>" + _esc(dep["loop_records_open"])
+           + "</b> · care confirmed: <b>" + _esc(dep["loop_records_closed"])
+           + "</b><br>Visit-note days stored: <b>"
+           + _esc(dep["visit_note_days_stored"]) + "</b>"
+           + ("<br>Mean time, screening → care confirmed: <b>"
+              + _esc(dep["mean_days_screened_to_care_confirmed"])
+              + " day(s)</b>"
+              if dep["mean_days_screened_to_care_confirmed"] is not None
+              else "")
+           + "</div>",
+           "<h2>Reproducible benchmark (synthetic, labelled)</h2>",
+           "<div class='card'>Corpus: <b>" + _esc(bench["corpus_lines"])
+           + "</b> hand-labelled note lines<br>"
+           "Danger signs caught: <b>" + _esc(bench["danger_signs_caught"])
+           + " / " + _esc(bench["danger_sign_lines"]) + "</b> (recall "
+           + recall_txt + ")<br>"
+           "False escalations on negated lines (“no bleeding”…): <b>"
+           + _esc(bench["false_escalations"]) + "</b><br>"
+           "Category accuracy: <b>" + acc_txt + "</b> · "
+           "Schedule-derived due dates: <b>"
+           + _esc(bench["schedule_fallback_dates"]) + "</b><br>"
+           "Sample day: <b>" + _esc(day.get("patients", "—"))
+           + "</b> patients → <b>" + _esc(day.get("escalations", "—"))
+           + "</b> escalations, <b>" + _esc(day.get("visits_planned", "—"))
+           + "</b> visits, reminders in <b>"
+           + _esc(day.get("reminder_languages_per_patient", "—"))
+           + "</b> languages, ≈<b>"
+           + _esc(day.get("est_worker_minutes_saved", "—"))
+           + "</b> worker-minutes saved, planned in <b>"
+           + _esc(day.get("runtime_ms", "—")) + " ms</b> offline.</div>",
+           "<p>Reproduce it: <code>PYTHONPATH=src python3 "
+           "benchmarks/run_benchmark.py</code> — the same JSON is at "
+           '<a href="/impact">/impact</a>.</p>',
+           "<div class='card'>" + _esc(impact["honesty"]) + "</div>"]
+    out.append(_helpline_footer("en"))
+    return "\n".join(out)
+
+
+# ---- Supervisor page (v1.5.0) ----
+# The HTML twin of /supervisor/summary: same aggregates, same rule —
+# counts and closure summaries only, never a visit note's contents.
+
+def supervisor_page(data: dict) -> str:
+    t = data["totals"]
+    out = [_head("en"),
+           '<p><a href="/">← Follow-up planner</a></p>',
+           "<h2>Supervisor view — " + _esc(data["date"]) + "</h2>",
+           "<p>Aggregate counts across all workers. Visit-note "
+           "contents are never shown here.</p>",
+           "<div class='card'>Tracked: <b>" + _esc(t["tracked"])
+           + "</b> · Open: <b>" + _esc(t["open"]) + "</b> · "
+           "Screened: " + _esc(t["by_state"]["screened"])
+           + " · Referred: " + _esc(t["by_state"]["referred"])
+           + " · Care confirmed: " + _esc(t["by_state"]["care confirmed"])
+           + ("<br>Mean time, screening → care confirmed: <b>"
+              + _esc(t["mean_days_screened_to_care_confirmed"])
+              + " day(s)</b>"
+              if t.get("mean_days_screened_to_care_confirmed") is not None
+              else "")
+           + "<br>Visit-note days stored (count only): <b>"
+           + _esc(data["visit_note_days_stored"]) + "</b></div>"]
+    if data.get("by_village"):
+        out.append("<h2>By village</h2>")
+        for village, b in sorted(data["by_village"].items()):
+            out.append("<div class='card'><b>" + _esc(village)
+                       + "</b> — tracked " + _esc(b["tracked"])
+                       + " · open " + _esc(b["open"]) + " · closed "
+                       + _esc(b["closed"]) + "</div>")
+    out.append("<h2>Workers</h2>")
+    for w in data["workers"]:
+        c = w["counts"]
+        out.append("<div class='card'><b>" + _esc(w["worker_id"])
+                   + "</b> — tracked " + _esc(c["tracked"])
+                   + " · open " + _esc(c["open"]) + "</div>")
+    out.append(_helpline_footer("en"))
     return "\n".join(out)
 
 

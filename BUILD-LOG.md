@@ -86,3 +86,31 @@ deployment claimed — README and SUBMISSION.md both state this plainly.
 - Deployed: /opt/sehatsathi on the VPS, venv + systemd service on
   port 8105; public URL verified end-to-end (intake → refer →
   confirm → closure over the public interface).
+
+## v1.5.0 — 2026-11-10 · Evidence + depth pass (Code for a Billion)
+
+Universal rule-set pass on Prasad's order (theme-fit re-verified
+first-hand against the CFI page + JUDGING.md: FIT, Health area).
+
+- Evidence: `impact.py` + `GET /impact`, `/impact/ui`, `/deployment`
+  — live deployment aggregates (counts only) + the reproducible
+  benchmark, computed at request time. `benchmark.py` +
+  `benchmarks/run_benchmark.py`: 41 hand-labelled lines → danger
+  recall 1.0, false escalations 0, category accuracy 1.0; the script
+  exits non-zero if a safety threshold fails.
+- Schedules: `schedule.py` (UIP / ANC / PNC / TB checkpoints) wired
+  into the extractor as a labelled fallback when a note gives a
+  stage but no date; risk reasons carry the confirm-on-card line.
+  New Patient fields: due_source, days_since_delivery,
+  treatment_month (loop_store round-trips them).
+- Intake depth: spoken-number parsing; duplicate-line merging in
+  the agent (summary counts merges); referral slips (EN/HI/KN,
+  fence on the slip's face) for escalations; loop closure aging +
+  days-open; intake needs-review flags.
+- Surfaces: supervisor page `/supervisor`, worker register CSV,
+  printable day sheets, one-tap `/demo/ui`, WhatsApp deep links,
+  grouped helplines, script-aware display language, <30 KB page
+  budget test.
+- Tests: 89 → 117 (tests/test_v15_features.py, 28 new), all green;
+  benchmark safety gate PASS; sample day unchanged (10/3/10).
+- Safety fence unchanged: records, reminders, scheduling only.
