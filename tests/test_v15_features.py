@@ -317,7 +317,7 @@ def test_helplines_grouped(tmp_path):
 
 def test_health_reports_new_version(tmp_path):
     client = _client(tmp_path)
-    assert client.get("/health").json()["version"] == "1.5.0"
+    assert client.get("/health").json()["version"] == "1.6.0"
 
 
 def test_public_pages_stay_light(tmp_path):

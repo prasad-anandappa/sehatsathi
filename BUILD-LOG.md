@@ -114,3 +114,32 @@ first-hand against the CFI page + JUDGING.md: FIT, Health area).
 - Tests: 89 → 117 (tests/test_v15_features.py, 28 new), all green;
   benchmark safety gate PASS; sample day unchanged (10/3/10).
 - Safety fence unchanged: records, reminders, scheduling only.
+
+## v1.6.0 — 2026-11-18 · Overdue flagging + case ownership (Future Health final)
+
+Reviewer feedback on the screening-to-care loop, answered:
+
+- Flags computed (never stored) from the recorded due date in
+  `loop.py`: open + due date passed + not care-confirmed →
+  **DELAYED** (result / follow-up overdue); referred + referral
+  visit date (same recorded due date) passed + not confirmed →
+  **MISSED VISIT** (takes precedence — the more specific failure).
+  Due today ≠ passed; confirmed cases never flag.
+- Surfaces: record `to_dict(on)` gains `owner` / `flags` /
+  `flag_labels`; closure summary gains `flagged` (with owners),
+  `delayed`, `missed_visits`, `flag_counts`; closure report gains a
+  flagged section + Owner column; tracker UI cards show a flag
+  banner with **Owner: <name>** on flagged cases and the owner on
+  every card; closure section + printable day sheet name flagged
+  owners; worker register CSV gains owner + flags columns.
+- Ownership: `LoopRecord.owner`, set at intake from the loop's
+  worker. `DurableScreeningLoop` derives it from the worker profile
+  (display name → phone → worker id) and adopts pre-v1.6.0 records
+  on load — no DB schema change (owner is the loop's worker by
+  construction). Demo loops use the labelled synthetic owner
+  "Demo health worker (synthetic)".
+- Version 1.5.0 → 1.6.0 (pyproject, `__init__.__version__`, FastAPI
+  title + `/health`); the v1.5 health-version test updated to pin
+  1.6.0. Tests: 117 → 137 (tests/test_v15_features.py version pin +
+  tests/test_v16_features.py, 20 new), all green; benchmark gate
+  PASS. Safety fence unchanged.

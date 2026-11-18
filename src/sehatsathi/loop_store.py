@@ -81,6 +81,9 @@ def _record_to_row(rec: LoopRecord) -> dict:
             "caregiver_notes": dict(f.caregiver_notes),
         },
         "state": rec.state.value,
+        # No "owner" key here on purpose (v1.6.0): LoopRecordRow has
+        # no owner column, and none is needed — a durable record's
+        # owner IS this loop's worker, re-derived on load (below).
         "screened_on": rec.screened_on.isoformat(),
         "referred_on": (rec.referred_on.isoformat()
                         if rec.referred_on else None),
@@ -106,6 +109,7 @@ def _record_from_row(row: dict) -> LoopRecord:
         patient=patient,
         followup=followup,
         state=LoopState(row["state"]),
+        owner=row.get("owner", ""),   # pre-v1.6 rows carry no owner
         screened_on=date.fromisoformat(row["screened_on"]),
         referred_on=(date.fromisoformat(row["referred_on"])
                      if row.get("referred_on") else None),
@@ -118,12 +122,25 @@ def _record_from_row(row: dict) -> LoopRecord:
 class DurableScreeningLoop(ScreeningLoop):
     """A ScreeningLoop whose every mutation is persisted per worker."""
 
-    def __init__(self, store: Store, worker_id: str) -> None:
-        super().__init__()
+    def __init__(self, store: Store, worker_id: str,
+                 owner: str = "") -> None:
+        # Case ownership (v1.6.0): a worker's cases are owned by that
+        # worker. The display owner defaults to the worker's profile
+        # name, then their phone, then their worker id — always a
+        # named, traceable owner, never blank.
+        if not owner:
+            profile = store.get_worker(worker_id) or {}
+            owner = (profile.get("display_name")
+                     or profile.get("phone") or worker_id)
+        super().__init__(owner=owner)
         self._store = store
         self._worker_id = worker_id
         for row in store.load_loop_records(worker_id):
             rec = _record_from_row(row)
+            if not rec.owner:
+                # Records stored before v1.6.0 have no owner on the
+                # row; the owning worker is this loop's worker.
+                rec.owner = self.owner
             self._records[rec.key] = rec
 
     def _sync(self) -> None:

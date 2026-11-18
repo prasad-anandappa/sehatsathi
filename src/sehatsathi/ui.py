@@ -54,6 +54,7 @@ box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .crit{border-left:6px solid #b91c1c}.high{border-left:6px solid #d97706}
 .med{border-left:6px solid #2563eb}.low{border-left:6px solid #6b7280}
 .small{font-size:.85rem;color:#444}.alt{color:#333}
+.flag{display:block;background:#fef3c7;border:1px solid #d97706;border-radius:6px;padding:6px 8px;margin:6px 0;color:#7c2d12}
 footer{font-size:.85rem;color:#444;margin:24px 0}
 a{color:#166534}
 """
@@ -306,9 +307,21 @@ def loop_page(loop_obj, today, message: str = "", demo: bool = False,
             card = ("<div class='card " + cls + "'><b>" + _esc(rec.patient.name)
                     + "</b> (" + _esc(rec.patient.village) + ") · "
                     + _esc(_STATE_BADGE[rec.state.label]) + " · "
-                    + _esc(f.priority.value) + "<br><span class='small'>"
-                    + _esc("; ".join(f.reasons)) + "</span><br>"
-                    + _esc(primary))
+                    + _esc(f.priority.value)
+                    + "<br><span class='small'>Owner: "
+                    + _esc(rec.owner_display) + "</span>")
+            rec_flags = rec.flags(today)
+            if rec_flags:
+                # Flagged case (v1.6.0): the flag and its owner are
+                # the loudest thing on the card — accountability for
+                # an overdue case must be unambiguous at a glance.
+                card += ("<span class='flag'>⚠ <b>"
+                         + _esc("; ".join(rec.flag_labels(today)))
+                         + "</b><br><b>Owner: "
+                         + _esc(rec.owner_display) + "</b></span>")
+            card += ("<br><span class='small'>"
+                     + _esc("; ".join(f.reasons)) + "</span><br>"
+                     + _esc(primary))
             if lang != "en":
                 card += "<br><span class='alt'>" + _esc(f.reminder_en) + "</span>"
             note = f.caregiver_notes.get(lang) if f.caregiver_notes else None
@@ -354,14 +367,29 @@ def loop_page(loop_obj, today, message: str = "", demo: bool = False,
                    + "</b> · open 2–3 days: <b>" + _esc(aging.get("open_2_3_days", 0))
                    + "</b> · open 4+ days: <b>" + _esc(aging.get("open_4_plus_days", 0))
                    + "</b> — a case open 4+ days needs the ANM's eye.</p>")
+        flag_counts = s.get("flag_counts") or {}
+        if flag_counts.get("delayed") or flag_counts.get("missed_visit"):
+            out.append("<p>⚠ <b>Flagged overdue:</b> "
+                       + _esc(flag_counts.get("delayed", 0))
+                       + " delayed (result / follow-up overdue) · "
+                       + _esc(flag_counts.get("missed_visit", 0))
+                       + " missed visit(s) — each flagged case below "
+                       "names its owner.</p>")
         if s["still_open"]:
             out.append("<p><b>Still open — carries to tomorrow:</b></p><ul>")
             for d in s["still_open"]:
-                out.append("<li><b>" + _esc(d["name"]) + "</b> ("
-                           + _esc(d["village"]) + ") — " + _esc(d["state"])
-                           + " · " + _esc(d["priority"]) + " · "
-                           + _esc(d["due_label"]) + " · open "
-                           + _esc(d.get("days_open", 0)) + " day(s)</li>")
+                item = ("<li><b>" + _esc(d["name"]) + "</b> ("
+                        + _esc(d["village"]) + ") — " + _esc(d["state"])
+                        + " · " + _esc(d["priority"]) + " · "
+                        + _esc(d["due_label"]) + " · open "
+                        + _esc(d.get("days_open", 0)) + " day(s) · Owner: "
+                        + _esc(d.get("owner", "")))
+                if d.get("flags"):
+                    item += ("<br>⚠ <b>"
+                             + _esc("; ".join(d.get("flag_labels", [])))
+                             + "</b> — <b>Owner: "
+                             + _esc(d.get("owner", "")) + "</b>")
+                out.append(item + "</li>")
             out.append("</ul>")
         else:
             out.append("<p>✅ <b>Loop fully closed</b> — every screened "
@@ -396,6 +424,15 @@ def print_sheet(loop_obj, today, heading: str = "SehatSathi — day sheet") -> s
            "<p>Today: " + _esc(s["screened_today"]) + " screened · "
            + _esc(s["referred_today"]) + " referred · "
            + _esc(s["care_confirmed_today"]) + " care confirmed</p>"]
+    if s.get("flagged"):
+        out.append("<h2>⚠ Flagged — overdue, owner named for "
+                   "follow-up</h2><ul>")
+        for d in s["flagged"]:
+            out.append("<li><b>" + _esc(d["name"]) + "</b> ("
+                       + _esc(d["village"]) + ") — "
+                       + _esc("; ".join(d["flag_labels"]))
+                       + " · Owner: " + _esc(d["owner"]) + "</li>")
+        out.append("</ul>")
     if s["open_escalations"]:
         out.append("<h2>🚨 Still open WITH danger signs — hand to the "
                    "ANM/PHC tonight</h2><ul>")

@@ -60,7 +60,7 @@ PYTHONPATH=src python3 -m sehatsathi.cli --notes data/sample_notes.txt --date 20
 
 # 2) Tests (needs pytest; API tests also need fastapi/httpx)
 pip install -e ".[dev,api]"
-pytest -q            # 117 tests
+pytest -q            # 137 tests
 
 # 3) API / deployed form
 uvicorn sehatsathi.api:app --port 8000     # after: pip install -e ".[api]"
@@ -126,6 +126,35 @@ Built for the Code for a Billion filing, against its judging rubric
   helplines (`/helplines`), script-aware result pages (Devanagari
   notes return a Hindi page), and a page-weight test that enforces
   the under-30 KB promise. **117 tests, all passing.**
+
+## v1.6.0 — overdue flagging + case ownership (2026-11-18)
+
+Built for the Future Health (Hack2skill) final submission, against
+reviewer feedback on the screening-to-care loop:
+
+- **Delayed-result flagging** — an open case whose expected
+  follow-up / result date (the recorded due date) has passed without
+  care being confirmed is flagged **DELAYED — result / follow-up
+  overdue** in the tracker UI, the loop JSON (`flags` /
+  `flag_labels`) and the day-end closure summary (`delayed` list +
+  `flag_counts`).
+- **Missed-visit flagging** — a referred case whose referral visit
+  date (the same recorded due date — the appointment the person was
+  referred for) has passed without care being confirmed is flagged
+  **MISSED VISIT**, in the same three surfaces (`missed_visits`).
+  Flags are computed from the dates already in the model, never
+  stored, so they cannot go stale; a care-confirmed case is never
+  flagged, and a date that is today has not yet passed.
+- **Case ownership** — every case carries a named **owner**: the
+  health worker who owns the case (durable loops derive it from the
+  worker's profile — display name, else phone, else worker id;
+  records stored before v1.6.0 are adopted by their worker's loop on
+  load). Every card shows its owner, and every **flagged** case
+  displays `Owner: <name>` prominently in the tracker card, the
+  closure list, the closure report and the printable day sheet.
+- Positioning unchanged: records, reminders and follow-up
+  organisation only — no diagnosis or treatment claims anywhere.
+  **137 tests, all passing** (20 new in `tests/test_v16_features.py`).
 
 ## Production build (v1.4.x)
 
@@ -247,9 +276,10 @@ src/sehatsathi/  extract.py · risk.py · planner.py · messages.py
                  api.py (FastAPI shell) · loop.py (loop logic) ·
                  loop_store.py (durable per-worker store) · db.py ·
                  auth.py · otp.py · config.py (production layer)
-tests/           117 pytest tests (extraction, risk, India features,
+tests/           137 pytest tests (extraction, risk, India features,
                  languages, UI, API, loop, production layer, as-user
-                 audit, v1.5.0 evidence + depth pass)
+                 audit, v1.5.0 evidence + depth pass, v1.6.0 flagging
+                 + ownership pass)
 benchmarks/      run_benchmark.py — the reproducible safety gate
 data/            sample_notes.txt — one synthetic day of ASHA notes
 ```

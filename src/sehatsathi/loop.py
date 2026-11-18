@@ -25,6 +25,18 @@ Storage: deliberately in-memory and dependency-free, like the rest of
 the core. A ScreeningLoop instance holds its records in a dict; the
 API layer keeps one instance per process (a prototype demo store —
 restarting the service clears it, which the API docstring states).
+
+v1.6.0 — overdue flagging + case ownership (Future Health reviewer
+feedback): an open case whose expected follow-up / result date (the
+recorded ``due_date``) has passed without care being confirmed is
+flagged DELAYED; a *referred* case whose referral visit date (the
+same recorded due date — the appointment the person was referred
+for) has passed without care being confirmed is flagged MISSED
+VISIT. Every record carries a named ``owner`` — the health worker
+who owns the case — and every flagged case surfaces that owner in
+the tracker and the closure summary, so accountability is never
+ambiguous. Flags are computed from dates already in the model;
+nothing here adds a diagnosis or treatment claim.
 """
 from __future__ import annotations
 
@@ -48,6 +60,17 @@ class LoopState(str, enum.Enum):
                 LoopState.REFERRED: "referred",
                 LoopState.CARE_COMPLETED: "care confirmed"}[self]
 
+
+# Overdue flags (v1.6.0). Computed, never stored: a flag is a pure
+# function of the record's state, its recorded due date and the day
+# being viewed, so it can never go stale or disagree with the dates.
+FLAG_DELAYED = "delayed"
+FLAG_MISSED_VISIT = "missed_visit"
+FLAG_LABELS = {
+    FLAG_DELAYED: "DELAYED — result / follow-up overdue",
+    FLAG_MISSED_VISIT: ("MISSED VISIT — referral visit date passed, "
+                        "care not confirmed"),
+}
 
 # Forward-only transitions. A record moves one step at a time so the
 # day-end summary can always say who was referred and who is still
@@ -83,6 +106,10 @@ class LoopRecord:
     referred_on: date | None = None
     care_confirmed_on: date | None = None
     history: list[dict] = field(default_factory=list)
+    # Case ownership (v1.6.0): the named health worker who owns this
+    # case. Set at intake from the loop's worker; a flagged case
+    # always displays it (see flags()).
+    owner: str = ""
 
     @property
     def key(self) -> str:
@@ -93,13 +120,48 @@ class LoopRecord:
     def is_open(self) -> bool:
         return self.state is not LoopState.CARE_COMPLETED
 
-    def to_dict(self) -> dict:
+    @property
+    def owner_display(self) -> str:
+        """The owner's name for display — never blank, so a flagged
+        case can always be traced to a person. A record intaked
+        outside a worker's loop (bare demo / unit use) reads
+        "Unassigned" until a worker's loop adopts it."""
+        return self.owner.strip() or "Unassigned"
+
+    def flags(self, on: date) -> list[str]:
+        """Overdue flags for this record as of ``on`` (v1.6.0).
+
+        Computed from the recorded due date — the expected
+        follow-up / result date, which for a referred case is the
+        referral visit date. A date that is today or in the future
+        has not passed, and a care-confirmed case can never be
+        flagged. A referred case past its visit date is a MISSED
+        VISIT (the more specific failure); any other open case past
+        its expected date is DELAYED.
+        """
+        if not self.is_open:
+            return []
+        due = self.patient.due_date
+        if due is None or due >= on:
+            return []
+        if self.state is LoopState.REFERRED:
+            return [FLAG_MISSED_VISIT]
+        return [FLAG_DELAYED]
+
+    def flag_labels(self, on: date) -> list[str]:
+        return [FLAG_LABELS[f] for f in self.flags(on)]
+
+    def to_dict(self, on: date | None = None) -> dict:
         p = self.patient
         return {
             "name": p.name,
             "village": p.village,
             "category": p.category.value,
             "state": self.state.label,
+            "owner": self.owner_display,
+            "flags": self.flags(on) if on is not None else [],
+            "flag_labels": (self.flag_labels(on) if on is not None
+                            else []),
             "priority": self.followup.priority.value,
             "score": self.followup.score,
             "due_date": p.due_date.isoformat() if p.due_date else None,
@@ -119,7 +181,11 @@ class LoopRecord:
 class ScreeningLoop:
     """One screening camp / PHC list, tracked until every loop closes."""
 
-    def __init__(self) -> None:
+    def __init__(self, owner: str = "") -> None:
+        # The health worker who owns every case intaked into this
+        # loop (v1.6.0). Durable per-worker loops derive it from the
+        # worker's identity; demo loops pass a labelled demo owner.
+        self.owner = owner
         self._records: dict[str, LoopRecord] = {}
 
     # ---- intake ----------------------------------------------------
@@ -145,7 +211,8 @@ class ScreeningLoop:
             fu.reminders = make_reminders(fu)
             fu.caregiver_notes = make_caregiver_note(fu)
             rec = LoopRecord(patient=patient, followup=fu,
-                             state=_initial_state(line), screened_on=today)
+                             state=_initial_state(line), screened_on=today,
+                             owner=self.owner)
             if rec.key in self._records:
                 duplicates.append(patient.name)
                 continue
@@ -269,9 +336,9 @@ class ScreeningLoop:
         return {"tracked": len(self._records), "by_state": by_state,
                 "open": sum(1 for r in self._records.values() if r.is_open)}
 
-    def to_dict(self) -> dict:
+    def to_dict(self, on: date | None = None) -> dict:
         return {"counts": self.counts(),
-                "records": [r.to_dict() for r in self.records()]}
+                "records": [r.to_dict(on) for r in self.records()]}
 
     # ---- day-end closure ----------------------------------------------
 
@@ -288,6 +355,12 @@ class ScreeningLoop:
                 "name": rec.patient.name, "village": rec.patient.village,
                 "category": rec.patient.category.value,
                 "state": rec.state.label,
+                # Ownership + overdue flags (v1.6.0): every open case
+                # names its owner; a flagged case's owner is the
+                # person accountable for chasing it tomorrow.
+                "owner": rec.owner_display,
+                "flags": rec.flags(day),
+                "flag_labels": rec.flag_labels(day),
                 "priority": fu.priority.value, "score": fu.score,
                 "due_label": rec.patient.due_label,
                 "danger_signs": rec.patient.danger_signs,
@@ -317,6 +390,20 @@ class ScreeningLoop:
             "care_confirmed_today": sum(1 for r in self._records.values()
                                         if r.care_confirmed_on == day),
             "still_open": still_open,
+            # Flagged-case roll-up (v1.6.0): named, with owners, so
+            # the day-end review opens with what is overdue — not
+            # buried inside the still-open list.
+            "flagged": [d for d in still_open if d["flags"]],
+            "delayed": [d["name"] for d in still_open
+                        if FLAG_DELAYED in d["flags"]],
+            "missed_visits": [d["name"] for d in still_open
+                              if FLAG_MISSED_VISIT in d["flags"]],
+            "flag_counts": {
+                FLAG_DELAYED: sum(1 for d in still_open
+                                  if FLAG_DELAYED in d["flags"]),
+                FLAG_MISSED_VISIT: sum(1 for d in still_open
+                                       if FLAG_MISSED_VISIT in d["flags"]),
+            },
             "open_escalations": [d["name"] for d in still_open
                                  if d["priority"] == Priority.CRITICAL.value],
             "loop_fully_closed": not still_open and bool(self._records),
@@ -335,6 +422,14 @@ class ScreeningLoop:
                  f"Today: {s['screened_today']} screened · "
                  f"{s['referred_today']} referred · "
                  f"{s['care_confirmed_today']} care confirmed", ""]
+        if s["flagged"]:
+            lines += ["## ⚠️ Flagged — overdue, owner named for follow-up",
+                      ""]
+            for d in s["flagged"]:
+                lines.append(f"- **{d['name']}** ({d['village']}) — "
+                             f"{'; '.join(d['flag_labels'])} · "
+                             f"Owner: {d['owner']}")
+            lines.append("")
         if s["open_escalations"]:
             lines += ["## 🚨 Still open WITH danger signs — hand to the ANM/PHC tonight",
                       ""]
@@ -345,12 +440,14 @@ class ScreeningLoop:
             lines.append("")
         if s["still_open"]:
             lines += ["## ⏳ Still open — carries to tomorrow, named here so nobody is dropped",
-                      "", "| # | Patient | Village | State | Priority | Open | Why |",
-                      "|---|---------|---------|-------|----------|------|-----|"]
+                      "", "| # | Patient | Village | State | Priority | Owner | Open | Why |",
+                      "|---|---------|---------|-------|----------|-------|------|-----|"]
             for i, d in enumerate(s["still_open"], 1):
+                flag_txt = (" ⚠ " + "; ".join(d["flag_labels"])
+                            if d["flags"] else "")
                 lines.append(f"| {i} | {d['name']} | {d['village']} | {d['state']} | "
-                             f"{d['priority']} | {d['days_open']}d | "
-                             f"{'; '.join(d['reasons'])} |")
+                             f"{d['priority']} | {d['owner']} | {d['days_open']}d | "
+                             f"{'; '.join(d['reasons'])}{flag_txt} |")
             lines.append("")
         else:
             lines += ["## ✅ Loop fully closed",

@@ -31,7 +31,7 @@ script — ready for SMS or WhatsApp. And all of this runs offline — pure
 Python, no internet, no API key — because that's the reality of the
 villages she serves."
 
-**2:40–3:00 — Close.** Show tests passing + repo. "One hundred seventeen automated
+**2:40–3:00 — Close.** Show tests passing + repo. "One hundred thirty-seven automated
 tests, MIT open source, built in AgentFoundry for Code for a Billion.
 SehatSathi — a companion for the worker, so she can be there for
 everyone else."

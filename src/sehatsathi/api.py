@@ -1,4 +1,4 @@
-"""FastAPI service — SehatSathi production API (v1.5.0).
+"""FastAPI service — SehatSathi production API (v1.6.0).
 
 Run:  uvicorn sehatsathi.api:app --host 0.0.0.0 --port 8105
 Docs: http://localhost:8105/docs
@@ -177,7 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     current_worker = make_current_worker(settings, auth)
 
     app = FastAPI(
-        title="SehatSathi", version="1.5.0",
+        title="SehatSathi", version="1.6.0",
         description="AI follow-up agent for India's frontline health "
                     "workers (ASHA/ANM).")
     app.add_middleware(GZipMiddleware, minimum_size=512)
@@ -217,7 +217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if token and token in self._loops:
                 return token, self._loops[token], False
             token = secrets.token_urlsafe(16)
-            loop_obj = ScreeningLoop()
+            loop_obj = ScreeningLoop(owner="Demo health worker (synthetic)")
             self._loops[token] = loop_obj
             while len(self._loops) > self._cap:
                 self._loops.pop(next(iter(self._loops)))
@@ -237,7 +237,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "service": "sehatsathi",
-                "offline_core": True, "version": "1.5.0",
+                "offline_core": True, "version": "1.6.0",
                 "storage": "durable", "auth_mode": settings.auth_mode}
 
     @app.get("/demo")
@@ -536,7 +536,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         writer = csv.writer(buf)
         writer.writerow(["name", "village", "category", "state",
                          "priority", "due_label", "due_date",
-                         "screened_on", "referred_on", "care_confirmed_on"])
+                         "screened_on", "referred_on", "care_confirmed_on",
+                         "owner", "flags"])
+        csv_today = date.today()
         for rec in loop_obj.records():
             p = rec.patient
             writer.writerow([
@@ -546,7 +548,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 rec.screened_on.isoformat(),
                 rec.referred_on.isoformat() if rec.referred_on else "",
                 rec.care_confirmed_on.isoformat()
-                if rec.care_confirmed_on else ""])
+                if rec.care_confirmed_on else "",
+                rec.owner_display, "; ".join(rec.flags(csv_today))])
         return PlainTextResponse(
             buf.getvalue(), media_type="text/csv",
             headers={"Content-Disposition":
@@ -580,38 +583,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                          ) -> dict:
         _check_size(req.list_text)
         loop_obj = worker_loop(worker.id)
-        result = loop_obj.intake(req.list_text, _parse_today(req.today))
-        return {"intake": result, "loop": loop_obj.to_dict()}
+        today = _parse_today(req.today)
+        result = loop_obj.intake(req.list_text, today)
+        return {"intake": result, "loop": loop_obj.to_dict(today)}
 
     @app.get("/loop")
-    def loop_state(worker: WorkerContext = Depends(current_worker)) -> dict:
-        return worker_loop(worker.id).to_dict()
+    def loop_state(today: str | None = None,
+                   worker: WorkerContext = Depends(current_worker)) -> dict:
+        return worker_loop(worker.id).to_dict(_parse_today(today))
 
     @app.post("/loop/refer")
     def loop_refer(req: AdvanceRequest,
                    worker: WorkerContext = Depends(current_worker)) -> dict:
         loop_obj = worker_loop(worker.id)
+        today = _parse_today(req.today)
         try:
-            rec = loop_obj.refer(req.name, _parse_today(req.today),
-                                 req.village)
+            rec = loop_obj.refer(req.name, today, req.village)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=_detail(e))
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
-        return {"record": rec.to_dict(), "loop": loop_obj.to_dict()}
+        return {"record": rec.to_dict(today), "loop": loop_obj.to_dict(today)}
 
     @app.post("/loop/confirm")
     def loop_confirm(req: AdvanceRequest,
                      worker: WorkerContext = Depends(current_worker)) -> dict:
         loop_obj = worker_loop(worker.id)
+        today = _parse_today(req.today)
         try:
-            rec = loop_obj.confirm_care(req.name, _parse_today(req.today),
-                                        req.village)
+            rec = loop_obj.confirm_care(req.name, today, req.village)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=_detail(e))
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
-        return {"record": rec.to_dict(), "loop": loop_obj.to_dict()}
+        return {"record": rec.to_dict(today), "loop": loop_obj.to_dict(today)}
 
     @app.post("/loop/remove")
     def loop_remove(req: AdvanceRequest,
@@ -723,7 +728,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         throwaway ScreeningLoop: intake → one referral recorded → one
         care confirmation → closure summary. Demo data only — no
         worker's real records are touched."""
-        throwaway = ScreeningLoop()
+        throwaway = ScreeningLoop(owner="Demo health worker (synthetic)")
         text = _SAMPLE_SCREENING.read_text(encoding="utf-8") \
             if _SAMPLE_SCREENING.exists() else ""
         day = date(2026, 11, 6)
@@ -733,7 +738,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"demo_data": True,
                 "note": "Synthetic demo data only — not a real "
                         "worker's records.",
-                "intake": intake, "loop": throwaway.to_dict(),
+                "intake": intake, "loop": throwaway.to_dict(day),
                 "closure": throwaway.closure_summary(day),
                 "closure_report": throwaway.closure_report(day)}
 
