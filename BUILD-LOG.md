@@ -143,3 +143,12 @@ Reviewer feedback on the screening-to-care loop, answered:
   1.6.0. Tests: 117 → 137 (tests/test_v15_features.py version pin +
   tests/test_v16_features.py, 20 new), all green; benchmark gate
   PASS. Safety fence unchanged.
+- Deployed 2026-11-18 (commit 129f041): prior app backed up to
+  `/opt/sehatsathi/app.bak-20261118-v150` on the VPS, release copied
+  to `/opt/sehatsathi/app`, `sehatsathi.service` restarted.
+  Verified live: `https://sehatsathi.nammaprojects.com/health` →
+  version 1.6.0; `/loop/demo` closure flags Priya as missed_visit
+  with the demo owner; the demo tracker page, intaked with
+  synthetic past-due cases, renders both the DELAYED and
+  MISSED VISIT banners, each with `Owner: Demo health worker
+  (synthetic)`, plus the closure "Flagged overdue" roll-up.
